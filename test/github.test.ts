@@ -7,7 +7,7 @@ import {
   type Http,
   type HttpResponse,
 } from "../src/github";
-import type { RawIssue, Snapshot } from "../src/model";
+import { buildModel, type RawIssue, type Snapshot } from "../src/model";
 
 const okHeaders: Record<string, string> = {};
 
@@ -34,7 +34,12 @@ function rawIssue(
 }
 
 function client(http: Http, repo = "owner/repo"): GitHubClient {
-  return new GitHubClient(() => ({ token: "secret", repo }), http);
+  return new GitHubClient(() => ({ token: "secret", repo }), async (url, headers) => {
+    if (url === `https://api.github.com/repos/${repo}`) {
+      return response(200, { full_name: repo });
+    }
+    return http(url, headers);
+  });
 }
 
 test("listAllIssues paginates, filters pull requests, and stops on a short page", async () => {
@@ -192,7 +197,7 @@ test("fetchSnapshot reuses unchanged dependency entries and preserves incrementa
   };
   const prev: Snapshot = {
     schemaVersion: 2,
-    repo: "old/repo",
+    repo: "new/repo",
     fetchedAt: 10,
     lastFullSync: 5,
     issues: [],
@@ -410,4 +415,93 @@ test("fetchSnapshot replaces lastFullSync when a full refresh is requested", asy
 
   assert.equal(snap.lastFullSync, snap.fetchedAt);
   assert.ok(snap.lastFullSync > 5);
+});
+
+for (const configured of ["former/project", "CANONICAL/PROJECT"]) {
+  for (const cached of [false, true]) {
+    test(`canonical identity restores layers for ${configured}, cached=${cached}`, async () => {
+      const canonical = "canonical/project";
+      let metadataCalls = 0;
+      let dependencyCalls = 0;
+      const gh = new GitHubClient(() => ({ token: "secret", repo: configured }), async (url) => {
+        if (url === `https://api.github.com/repos/${configured}`) {
+          metadataCalls++;
+          return response(200, { full_name: canonical });
+        }
+        if (url.includes("/issues?")) {
+          return response(200, [rawIssue(7, ["wayfinder:map"]), rawIssue(41), rawIssue(42)]);
+        }
+        if (url.includes("/sub_issues")) return response(200, [{ number: 41 }, { number: 42 }]);
+        if (url.includes("/dependencies/")) {
+          dependencyCalls++;
+          return response(200, url.includes("/issues/42/") ? [
+            { number: 41, state: "open", repository: { full_name: canonical } },
+            { number: 41, state: "open", repository: { full_name: "other/project" } },
+          ] : []);
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+      const previous: Snapshot | null = cached ? {
+        schemaVersion: 2, repo: configured, fetchedAt: 10, lastFullSync: 5, issues: [],
+        parents: { "41": 7, "42": 7 },
+        deps: {
+          "41": { updatedAt: "2026-01-01T00:00:00Z", blockedBy: [] },
+          "42": { updatedAt: "2026-01-01T00:00:00Z", blockedBy: [
+            { number: 41, state: "open", repo: canonical },
+            { number: 41, state: "open", repo: "other/project" },
+          ] },
+        },
+      } : null;
+      const snapshot = await fetchSnapshot(gh, previous, false);
+      assert.deepEqual(snapshot.deps["42"].blockedBy, [
+        { number: 41, state: "open" },
+        { number: 41, state: "open", repo: "other/project" },
+      ]);
+      assert.deepEqual(buildModel(snapshot).maps[0].layers.map(layer => layer.map(t => t.issue.number)), [[41], [42]]);
+      assert.equal(snapshot.repo, configured);
+      assert.equal(metadataCalls, 1);
+      assert.equal(dependencyCalls, cached ? 0 : 2);
+      if (previous) assert.equal(previous.deps["42"].blockedBy[0].repo, canonical);
+    });
+  }
+}
+
+test("repository identity failures abort sync without trusting cached blockers", async () => {
+  for (const result of [response(403, {}), response(200, { full_name: null })]) {
+    let calls = 0;
+    const gh = new GitHubClient(() => ({ token: "secret", repo: "former/project" }), async () => {
+      calls++;
+      return result;
+    });
+    await assert.rejects(() => fetchSnapshot(gh, null, false), result.status === 403
+      ? /Token lacks permission/ : /GitHub returned an invalid repository name/);
+    assert.equal(calls, 1);
+  }
+});
+
+test("client identity and cached dependencies follow the configured repository", async () => {
+  let repo = "former/project";
+  const metadata: string[] = [];
+  let dependencyCalls = 0;
+  const gh = new GitHubClient(() => ({ token: "secret", repo }), async (url) => {
+    const canonical = repo === "former/project" ? "canonical/project" : "different/project";
+    if (url === `https://api.github.com/repos/${repo}`) {
+      metadata.push(repo);
+      return response(200, { full_name: canonical });
+    }
+    if (url.includes("/issues?")) return response(200, [rawIssue(42)]);
+    if (url.includes("/dependencies/")) {
+      dependencyCalls++;
+      return response(200, [{ number: 41, state: "open", repository: { full_name: "canonical/project" } }]);
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  const previous = await fetchSnapshot(gh, null, false);
+  assert.deepEqual(previous.deps["42"].blockedBy, [{ number: 41, state: "open" }]);
+  repo = "different/project";
+  const snapshot = await fetchSnapshot(gh, previous, false);
+  assert.deepEqual(snapshot.deps["42"].blockedBy, [{ number: 41, state: "open", repo: "canonical/project" }]);
+  assert.deepEqual(metadata, ["former/project", "different/project"]);
+  assert.equal(dependencyCalls, 2);
+  assert.equal(snapshot.lastFullSync, snapshot.fetchedAt);
 });
