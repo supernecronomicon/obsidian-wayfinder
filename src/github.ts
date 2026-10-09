@@ -70,6 +70,7 @@ export interface IssueListResult {
 
 export class GitHubClient {
   private dependencyErrorMessage: string | null = null;
+  private repositoryIdentity: { repo: string; canonical: string } | null = null;
 
   constructor(private config: () => GitHubConfig, private http: Http) {}
 
@@ -87,6 +88,30 @@ export class GitHubClient {
 
   private async get(path: string): Promise<HttpResponse> {
     return this.http(`${API}/repos/${this.config().repo}${path}`, this.headers());
+  }
+
+  /** Resolve redirects once per sync; settings and snapshot keys keep their configured name. */
+  async resolveRepository(): Promise<void> {
+    this.repositoryIdentity = null;
+    const repo = this.repo;
+    const res = await this.get("");
+    if (res.status !== 200) {
+      throw new Error(classifyError(res.status, res.headers, responseMessage(res.json)));
+    }
+    const canonical = (res.json as { full_name?: unknown } | null)?.full_name;
+    if (typeof canonical !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(canonical)) {
+      throw new Error("GitHub returned an invalid repository name — will retry on next sync.");
+    }
+    this.repositoryIdentity = { repo, canonical };
+  }
+
+  /** Also repairs persisted refs that older versions marked foreign after a rename. */
+  normalizeBlocker(ref: BlockerRef): BlockerRef {
+    const identity = this.repositoryIdentity;
+    const localRepo = identity?.repo === this.repo ? identity.canonical : this.repo;
+    if (!ref.repo || ref.repo.toLowerCase() !== localRepo.toLowerCase()) return ref;
+    const { repo: _repo, ...local } = ref;
+    return local;
   }
 
   async listAllIssues(): Promise<IssueListResult> {
@@ -155,8 +180,8 @@ export class GitHubClient {
           const ref: BlockerRef = { number: issue.number };
           if (issue.state === "open" || issue.state === "closed") ref.state = issue.state;
           const repo = issue.repository?.full_name;
-          if (repo && repo !== this.repo) ref.repo = repo;
-          return ref;
+          if (repo) ref.repo = repo;
+          return this.normalizeBlocker(ref);
         }),
       );
       if (batch.length < 100) break;
@@ -242,6 +267,9 @@ export async function fetchSnapshot(
   full: boolean,
   onWarning?: (message: string) => void,
 ): Promise<Snapshot> {
+  await gh.resolveRepository();
+  // Issue numbers belong to a repository, so never reuse another repo's cache.
+  if (prev && prev.repo.toLowerCase() !== gh.repo.toLowerCase()) prev = null;
   const { issues, truncated } = await gh.listAllIssues();
   if (truncated) onWarning?.("Repo has more than 5000 issues — view may be incomplete");
   const targets = issues.filter((i) => {
@@ -277,7 +305,10 @@ export async function fetchSnapshot(
   const stale = targets.filter((i) => {
     const prevDep = prev?.deps[String(i.number)];
     if (!full && prevDep && !prevDep.unverified && prevDep.updatedAt === i.updated_at) {
-      deps[String(i.number)] = prevDep;
+      const blockedBy = prevDep.blockedBy.map((ref) => gh.normalizeBlocker(ref));
+      deps[String(i.number)] = blockedBy.some((ref, index) => ref !== prevDep.blockedBy[index])
+        ? { ...prevDep, blockedBy }
+        : prevDep;
       return false;
     }
     return true;
