@@ -16,6 +16,7 @@ The wayfinder skill and methodology this plugin visualizes — maps, tickets, fr
 - **Orphan warnings** — `wayfinder:*` tickets whose "Part of #N" parent is missing or isn't a map get flagged instead of silently vanishing.
 - **Ticket details + actions** — click/tap a ticket for a modal with its rendered Markdown description, linked blockers, assignee, live-fetched comments, and Copy `/wayfinder` / Open-on-GitHub buttons. The ⧉ on every card copies immediately; on takeable tickets it first checks for a new claim or resolution and replaces the action with a warning when necessary. ↗ opens GitHub.
 - **Per-device view state** — map focus, display filters, view mode, and zoom are stored locally on each device. Use the toolbar, Ctrl/Cmd+wheel, or pinch to adjust zoom.
+- **Ticket search** — press Cmd/Ctrl+F in the Wayfinder view (or run "Search tickets") and type a number or title words. Each result shows the map it belongs to, or "not in any map". Picking one expands its map, loosens only the filters hiding it, then scrolls to and highlights the ticket.
 
 ## Setup
 

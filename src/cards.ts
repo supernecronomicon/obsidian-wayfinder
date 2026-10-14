@@ -1,7 +1,7 @@
 import { setIcon, type App } from "obsidian";
 import type WayfinderPlugin from "./main";
 import { TicketModal } from "./modal";
-import { blockerLabel, type MapTree, type RawIssue, type Ticket } from "./model";
+import { blockerLabel, issueKey, type MapTree, type RawIssue, type Ticket } from "./model";
 
 export interface TicketCardOptions {
   app: App;
@@ -26,6 +26,7 @@ export function renderTicketCard(
     cls: `wf-ticket wf-t-${ticket.type}${options.asRow ? " wf-ticket-row" : ""}`,
   });
   card.dataset.issue = String(ticket.issue.number);
+  card.dataset.issueKey = issueKey(ticket.repo, ticket.issue.number);
   const closed = ticket.issue.state === "closed";
   const blocked = !closed && ticket.openBlockers.length > 0;
   if (closed) card.addClass("wf-closed");
