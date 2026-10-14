@@ -39,6 +39,7 @@ function ticket(
     issue: raw,
     type: "task",
     mode: "either",
+    priority: null,
     parent: 10,
     blockers: [],
     blockedBy: [],

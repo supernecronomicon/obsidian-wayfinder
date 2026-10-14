@@ -351,3 +351,18 @@ body.theme-light .wayfinder-view {
   outline-offset: 2px;
   box-shadow: 0 0 0 6px hsla(var(--interactive-accent-hsl), 0.25);
 }
+
+/* Priority badge — accent only on P0/P1; node colour stays type/mode-driven. */
+.wf-priority {
+  display: inline-flex; align-items: center; gap: 0.1rem;
+  font-size: 0.6em; font-weight: 700; letter-spacing: 0.05em;
+  border: 1px solid var(--background-modifier-border); border-radius: 3px;
+  padding: 0.05rem 0.28rem; color: var(--text-muted);
+}
+.wf-priority-p0, .wf-priority-p1 {
+  color: var(--color-orange);
+  border-color: color-mix(in srgb, var(--color-orange) 45%, transparent);
+  background: color-mix(in srgb, var(--color-orange) 12%, transparent);
+}
+.wf-priority-p0 { color: var(--color-red); border-color: color-mix(in srgb, var(--color-red) 45%, transparent); background: color-mix(in srgb, var(--color-red) 12%, transparent); }
+.wf-priority-conflict { color: var(--text-error); font-weight: 800; }

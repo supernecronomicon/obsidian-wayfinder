@@ -1,7 +1,14 @@
-import { setIcon, type App } from "obsidian";
+import { Menu, setIcon, type App } from "obsidian";
 import type WayfinderPlugin from "./main";
 import { TicketModal } from "./modal";
-import { blockerLabel, issueKey, type MapTree, type RawIssue, type Ticket } from "./model";
+import {
+  blockerLabel,
+  issueKey,
+  type MapTree,
+  type PriorityLevel,
+  type RawIssue,
+  type Ticket,
+} from "./model";
 
 export interface TicketCardOptions {
   app: App;
@@ -47,6 +54,7 @@ export function renderTicketCard(
   const row1 = main.createDiv({ cls: "wf-row1" });
   row1.createSpan({ cls: "wf-num", text: `#${ticket.issue.number}` });
   row1.createSpan({ cls: "wf-type", text: ticket.type });
+  renderPriorityBadge(row1, ticket);
   row1.createSpan({
     cls: `wf-mode wf-mode-${ticket.mode.toLowerCase()}`,
     text: ticket.mode,
@@ -82,6 +90,44 @@ export function renderTicketCard(
     new TicketModal(options.app, options.plugin, ticket, map).open();
   });
   options.attachHover(card, ticket, map);
+  card.addEventListener("contextmenu", (event) => {
+    if (!options.plugin.canSetPriority(ticket.repo)) return;
+    event.preventDefault();
+    showPriorityMenu(event, ticket, options.plugin);
+  });
+}
+
+function renderPriorityBadge(row: HTMLElement, ticket: Ticket): void {
+  const priority = ticket.priority;
+  if (!priority) return;
+  const badge = row.createSpan({
+    cls: `wf-priority wf-priority-p${priority.level}`,
+    text: `P${priority.level}`,
+  });
+  if (priority.conflicting.length > 0) {
+    badge.createSpan({ cls: "wf-priority-conflict", text: "!" });
+    badge.setAttr("aria-label", `Conflicting priority labels: ${priority.conflicting.join(", ")}`);
+  }
+}
+
+function showPriorityMenu(event: MouseEvent, ticket: Ticket, plugin: WayfinderPlugin): void {
+  const busy = plugin.isSettingPriority(ticket.repo, ticket.issue.number);
+  const levels: (PriorityLevel | null)[] = [0, 1, 2, 3, null];
+  const menu = new Menu();
+  for (const level of levels) {
+    menu.addItem((item) =>
+      item
+        .setTitle(level === null ? "Set priority: none" : `Set priority: P${level}`)
+        .setChecked(
+          level === null
+            ? ticket.priority === null
+            : ticket.priority?.level === level && ticket.priority.conflicting.length === 0,
+        )
+        .setDisabled(busy)
+        .onClick(() => void plugin.setPriority(ticket.repo, ticket.issue.number, level)),
+    );
+  }
+  menu.showAtMouseEvent(event);
 }
 
 /**

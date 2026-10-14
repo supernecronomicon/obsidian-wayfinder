@@ -14,6 +14,14 @@
 
 export type TicketType = "grilling" | "research" | "prototype" | "task";
 export type Mode = "AFK" | "HITL" | "either";
+/** 0 = most urgent. `priority:urgent|high|medium|low` map onto p0..p3. */
+export type PriorityLevel = 0 | 1 | 2 | 3;
+
+export interface Priority {
+  level: PriorityLevel;
+  /** Every priority label on the issue when more than one is present. */
+  conflicting: string[];
+}
 
 export interface RawIssue {
   number: number;
@@ -54,6 +62,7 @@ export interface Ticket {
   issue: RawIssue;
   type: TicketType;
   mode: Mode;
+  priority: Priority | null;
   parent: number | null;
   blockers: BlockerRef[];
   blockedBy: number[];
@@ -125,6 +134,28 @@ export function modeOf(type: TicketType, labels: string[]): Mode {
   return "either";
 }
 
+const PRIORITY_WORDS: Record<string, PriorityLevel> = {
+  urgent: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
+/** Level for one label, or null when it isn't a priority label. */
+export function priorityLevelOf(label: string): PriorityLevel | null {
+  const m = label.trim().toLowerCase().match(/^priority:\s*(p[0-3]|urgent|high|medium|low)$/);
+  if (!m) return null;
+  return m[1].startsWith("p") ? (Number(m[1][1]) as PriorityLevel) : PRIORITY_WORDS[m[1]];
+}
+
+/** Most urgent priority label wins; the rest are reported as a conflict. */
+export function priorityOf(labels: string[]): Priority | null {
+  const found = labels.filter((label) => priorityLevelOf(label) !== null);
+  if (found.length === 0) return null;
+  const level = Math.min(...found.map((label) => priorityLevelOf(label)!)) as PriorityLevel;
+  return { level, conflicting: found.length > 1 ? found : [] };
+}
+
 export function blockerLabel(blocker: BlockerRef): string {
   return `${blocker.repo ? `${blocker.repo}#` : "#"}${blocker.number}`;
 }
@@ -166,6 +197,7 @@ export function buildModel(snap: Snapshot): Model {
       issue,
       type,
       mode: hasConflictingLabels(issue.labels) ? "HITL" : modeOf(type, issue.labels),
+      priority: priorityOf(issue.labels),
       parent: snap.parents?.[String(issue.number)] ?? parentOf(issue.body),
       blockers,
       blockedBy,

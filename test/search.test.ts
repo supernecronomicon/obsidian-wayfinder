@@ -22,6 +22,7 @@ function ticket(number: number, title: string, state: "open" | "closed" = "open"
     issue: issue(number, title, state),
     type: "task",
     mode: "AFK",
+    priority: null,
     parent: null,
     blockers: [],
     blockedBy: [],

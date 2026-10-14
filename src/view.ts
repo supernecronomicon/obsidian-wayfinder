@@ -325,7 +325,7 @@ export class WayfinderView extends ItemView {
           fetchedAt: snapshot.fetchedAt,
           issues: snapshot.issues.map(
             (issue) =>
-              `${issue.number}:${issue.updated_at}:${issue.state}:${issue.assignees.join(",")}`,
+              `${issue.number}:${issue.updated_at}:${issue.state}:${issue.assignees.join(",")}:${issue.labels.join(",")}`,
           ),
           parents: snapshot.parents,
           deps: snapshot.deps,

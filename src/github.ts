@@ -4,7 +4,7 @@
  */
 
 import type { BlockerRef, DepEntry, RawIssue, Snapshot } from "./model";
-import { wayfinderType } from "./model";
+import { priorityLevelOf, wayfinderType, type PriorityLevel } from "./model";
 
 export interface HttpResponse {
   status: number;
@@ -12,7 +12,19 @@ export interface HttpResponse {
   json: unknown;
 }
 
-export type Http = (url: string, headers: Record<string, string>) => Promise<HttpResponse>;
+export interface HttpWrite {
+  method: "PUT";
+  body: string;
+}
+
+export type Http = (
+  url: string,
+  headers: Record<string, string>,
+  write?: HttpWrite,
+) => Promise<HttpResponse>;
+
+/** Outcome of a label write; "denied" means the token can only read. */
+export type PriorityWrite = { status: "ok"; issue: RawIssue } | { status: "denied" };
 
 export interface GitHubConfig {
   token: string;
@@ -222,6 +234,34 @@ export class GitHubClient {
     return comments;
   }
 
+  /**
+   * Replace the issue's priority labels with `priority:p<level>` (or none).
+   * Reads the issue fresh first so labels changed since the last sync survive.
+   */
+  async setPriority(issueNumber: number, level: PriorityLevel | null): Promise<PriorityWrite> {
+    const current = await this.get(`/issues/${issueNumber}`);
+    if (current.status !== 200) {
+      if (isDenied(current)) return { status: "denied" };
+      throw new Error(classifyError(current.status, current.headers, responseMessage(current.json)));
+    }
+    const labels = toRawIssue(current.json as Record<string, unknown>).labels.filter(
+      (label) => priorityLevelOf(label) === null,
+    );
+    if (level !== null) labels.push(`priority:p${level}`);
+    const res = await this.http(
+      `${API}/repos/${this.config().repo}/issues/${issueNumber}/labels`,
+      this.headers(),
+      { method: "PUT", body: JSON.stringify({ labels }) },
+    );
+    if (res.status === 200) {
+      const issue = toRawIssue(current.json as Record<string, unknown>);
+      issue.labels = ((res.json as { name: string }[]) ?? []).map((l) => l.name);
+      return { status: "ok", issue };
+    }
+    if (isDenied(res)) return { status: "denied" };
+    throw new Error(classifyError(res.status, res.headers, responseMessage(res.json)));
+  }
+
   resetDependencyErrors(): void {
     this.dependencyErrorMessage = null;
   }
@@ -248,6 +288,13 @@ function toRawIssue(raw: Record<string, unknown>): RawIssue {
     html_url: raw.html_url as string,
     updated_at: raw.updated_at as string,
   };
+}
+
+/** A permission refusal, as opposed to a rate limit or outage. */
+function isDenied(res: HttpResponse): boolean {
+  if (res.status === 404) return true;
+  if (res.status !== 403) return false;
+  return !classifyError(res.status, res.headers, responseMessage(res.json)).includes("rate limit");
 }
 
 function responseMessage(json: unknown): string | undefined {
