@@ -7,7 +7,8 @@ import {
   type WayfinderSettings,
 } from "./config";
 import { GitHubClient, fetchSnapshot, type Http, type IssueComment } from "./github";
-import { buildModel, issueKey, type PriorityLevel, type RawIssue, type Snapshot } from "./model";
+import { buildModel, type PriorityLevel, type RawIssue, type Snapshot } from "./model";
+import { PriorityWriteGuard } from "./priority-guard";
 import { WayfinderSettingTab } from "./settings";
 import { VIEW_TYPE_WAYFINDER, WayfinderView } from "./view";
 
@@ -49,42 +50,40 @@ export default class WayfinderPlugin extends Plugin {
   private pendingSync: boolean | null = null;
   /** Repos whose token refused a label write this session — setter hidden. */
   private priorityReadOnly = new Set<string>();
-  /** Issue keys with a priority write in flight — one write per ticket at a time. */
-  private priorityWrites = new Set<string>();
+  /** One priority write per ticket at a time. */
+  private priorityWrites = new PriorityWriteGuard();
 
   canSetPriority(repo: string): boolean {
     return !this.priorityReadOnly.has(repo);
   }
 
   isSettingPriority(repo: string, issueNumber: number): boolean {
-    return this.priorityWrites.has(issueKey(repo, issueNumber));
+    return this.priorityWrites.isInFlight(repo, issueNumber);
   }
 
   /** Optional write path: a token without label write access is not an error. */
   async setPriority(repo: string, issueNumber: number, level: PriorityLevel | null): Promise<void> {
-    const key = issueKey(repo, issueNumber);
-    if (this.priorityWrites.has(key) || !this.canSetPriority(repo)) return;
-    this.priorityWrites.add(key);
-    this.events.trigger("wayfinder:updated");
-    try {
-      const result = await this.clientForRepo(repo).setPriority(issueNumber, level);
-      if (result.status === "denied") {
-        this.priorityReadOnly.add(repo);
-        new Notice("Priority is read-only: the token can't edit labels");
-        return;
-      }
-      const snap = this.snapshots[repo];
-      const index = snap?.issues.findIndex((i) => i.number === issueNumber) ?? -1;
-      if (snap && index >= 0) {
-        snap.issues[index] = result.issue;
-        await this.persist();
-      }
-    } catch (e) {
-      new Notice(`Couldn't set priority on #${issueNumber}: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      this.priorityWrites.delete(key);
+    if (!this.canSetPriority(repo)) return;
+    const outcome = await this.priorityWrites.set(repo, issueNumber, async () => {
       this.events.trigger("wayfinder:updated");
-    }
+      try {
+        const result = await this.clientForRepo(repo).setPriority(issueNumber, level);
+        if (result.status === "denied") {
+          this.priorityReadOnly.add(repo);
+          new Notice("Priority is read-only: the token can't edit labels");
+          return;
+        }
+        const snap = this.snapshots[repo];
+        const index = snap?.issues.findIndex((i) => i.number === issueNumber) ?? -1;
+        if (snap && index >= 0) {
+          snap.issues[index] = result.issue;
+          await this.persist();
+        }
+      } catch (e) {
+        new Notice(`Couldn't set priority on #${issueNumber}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    });
+    if (outcome.status === "ok") this.events.trigger("wayfinder:updated");
   }
 
   // Async so a missing repo config rejects instead of throwing into the caller.
