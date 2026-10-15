@@ -14,7 +14,7 @@
 
 export type TicketType = "grilling" | "research" | "prototype" | "task";
 export type Mode = "AFK" | "HITL" | "either";
-/** 0 = most urgent. `priority:urgent|high|medium|low` map onto p0..p3. */
+/** 0 = most urgent. `priority:ultra|urgent|high|medium|low` map onto p0..p3 (ultra and urgent are both P0). */
 export type PriorityLevel = 0 | 1 | 2 | 3;
 
 export interface Priority {
@@ -135,6 +135,7 @@ export function modeOf(type: TicketType, labels: string[]): Mode {
 }
 
 const PRIORITY_WORDS: Record<string, PriorityLevel> = {
+  ultra: 0,
   urgent: 0,
   high: 1,
   medium: 2,
@@ -143,7 +144,7 @@ const PRIORITY_WORDS: Record<string, PriorityLevel> = {
 
 /** Level for one label, or null when it isn't a priority label. */
 export function priorityLevelOf(label: string): PriorityLevel | null {
-  const m = label.trim().toLowerCase().match(/^priority:\s*(p[0-3]|urgent|high|medium|low)$/);
+  const m = label.trim().toLowerCase().match(/^priority:\s*(p[0-3]|ultra|urgent|high|medium|low)$/);
   if (!m) return null;
   return m[1].startsWith("p") ? (Number(m[1][1]) as PriorityLevel) : PRIORITY_WORDS[m[1]];
 }

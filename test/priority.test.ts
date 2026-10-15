@@ -6,6 +6,8 @@ import { priorityLevelOf, priorityOf } from "../src/model";
 test("priority labels: both schemes map onto one P0-P3 scale", () => {
   assert.equal(priorityLevelOf("priority:p0"), 0);
   assert.equal(priorityLevelOf("priority:urgent"), 0);
+  assert.equal(priorityLevelOf("priority:ultra"), 0);
+  assert.equal(priorityLevelOf("Priority:ULTRA"), 0);
   assert.equal(priorityLevelOf("priority:P1"), 1);
   assert.equal(priorityLevelOf("Priority:High"), 1);
   assert.equal(priorityLevelOf("priority:medium"), 2);
