@@ -1,10 +1,12 @@
-import { ItemView, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Notice, Platform, Scope, WorkspaceLeaf, setIcon } from "obsidian";
 import { addIconActions, type TicketCardOptions } from "./cards";
 import { HoverCards, relativeTime } from "./hover";
 import { renderList } from "./list";
 import type WayfinderPlugin from "./main";
 import type { TakeableVerification } from "./main";
 import { TicketModal } from "./modal";
+import { mapLabel, type SearchHit } from "./search";
+import { TicketSearchModal } from "./search-modal";
 import {
   buildModel,
   issueKey,
@@ -78,6 +80,69 @@ export class WayfinderView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private plugin: WayfinderPlugin) {
     super(leaf);
+    // Cmd/Ctrl+F while this view has focus opens ticket search instead of
+    // Obsidian's find, which has nothing to search in a custom view.
+    this.scope = new Scope(this.app.scope);
+    this.scope.register(["Mod"], "f", (event) => {
+      event.preventDefault();
+      this.openSearch();
+      return false;
+    });
+  }
+
+  /** Search every configured repo, even ones hidden by the repo filter. */
+  openSearch(): void {
+    const model = mergeModels(
+      this.configuredRepos.flatMap((repo) => {
+        const snapshot = this.plugin.snapshots[repo];
+        return snapshot ? [buildModel(snapshot)] : [];
+      }),
+    );
+    new TicketSearchModal(
+      this.app,
+      model,
+      this.configuredRepos.length > 1,
+      (hit) => this.revealTicket(hit),
+    ).open();
+  }
+
+  /** Loosen only the filters that would hide this ticket, then scroll to and highlight it. */
+  revealTicket(hit: SearchHit): void {
+    const { ticket, map } = hit;
+    const hidden = this.hiddenRepos;
+    if (hidden.delete(ticket.repo)) {
+      window.localStorage.setItem(HIDDEN_REPOS_KEY, JSON.stringify([...hidden]));
+    }
+    if (ticket.issue.state === "closed" && this.incompleteTicketsOnly) {
+      window.localStorage.setItem(INCOMPLETE_TICKETS_ONLY_KEY, "false");
+    }
+    if (map) {
+      const mapKey = issueKey(map.repo, map.issue.number);
+      if (map.issue.state === "closed" && !this.showCompletedMaps) {
+        window.localStorage.setItem(SHOW_COMPLETED_MAPS_KEY, "true");
+      }
+      if (this.selectedMapKey !== null && this.selectedMapKey !== mapKey) {
+        window.localStorage.removeItem(SELECTED_MAP_KEY);
+      }
+      this.collapsedOverride.set(mapKey, false);
+    } else {
+      window.localStorage.removeItem(SELECTED_MAP_KEY);
+    }
+    this.render();
+
+    const key = issueKey(ticket.repo, ticket.issue.number);
+    const card = Array.from(
+      this.contentEl.querySelectorAll<HTMLElement>("[data-issue-key]"),
+    ).find((el) => el.dataset.issueKey === key);
+    if (!card) {
+      new Notice(`Wayfinder: #${ticket.issue.number} is not on the map.`);
+      return;
+    }
+    card.scrollIntoView({ block: "center", inline: "center" });
+    card.querySelector<HTMLElement>(".wf-card-main")?.focus({ preventScroll: true });
+    card.addClass("wf-search-hit");
+    window.setTimeout(() => card.removeClass("wf-search-hit"), 4000);
+    new Notice(`#${ticket.issue.number} — ${mapLabel(hit, this.configuredRepos.length > 1)}`);
   }
 
   getViewType(): string {
@@ -673,6 +738,7 @@ export class WayfinderView extends ItemView {
     });
     for (const t of orphans) {
       const row = box.createDiv({ cls: "wf-orphan-row" });
+      row.dataset.issueKey = issueKey(t.repo, t.issue.number);
       const main = row.createDiv({ cls: "wf-card-main wf-orphan-main" });
       main.setAttr("aria-label", `#${t.issue.number} ${t.issue.title}`);
       main.createSpan({ cls: "wf-num", text: `#${t.issue.number}` });

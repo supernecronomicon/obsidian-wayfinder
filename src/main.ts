@@ -182,6 +182,15 @@ export default class WayfinderPlugin extends Plugin {
       name: "Copy /wayfinder for the next takeable ticket",
       callback: () => this.copyNextTakeable(),
     });
+    this.addCommand({
+      id: "search-tickets",
+      name: "Search tickets",
+      callback: async () => {
+        await this.activateView();
+        const view = this.app.workspace.getLeavesOfType(VIEW_TYPE_WAYFINDER)[0]?.view;
+        if (view instanceof WayfinderView) view.openSearch();
+      },
+    });
     this.addSettingTab(new WayfinderSettingTab(this.app, this));
   }
 
