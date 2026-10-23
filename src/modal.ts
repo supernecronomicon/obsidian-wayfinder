@@ -38,6 +38,7 @@ export class TicketModal extends Modal {
     }
     row.createSpan({ cls: "wf-modal-state", text: this.stateText() });
     head.createDiv({ cls: "wf-modal-title", text: issue.title });
+    this.makeDraggable(head);
 
     const actions = contentEl.createDiv({ cls: "wf-modal-actions" });
     const copyBtn = actions.createEl("button", { text: "Copy /wayfinder command", cls: "mod-cta" });
@@ -131,6 +132,34 @@ export class TicketModal extends Modal {
     if (this.ticket && this.ticket.openBlockers.length > 0) return "🔒 blocked";
     if (issue.assignees.length > 0) return "● claimed";
     return "● open";
+  }
+
+  /** Drag the window by its header; buttons and links in the header still click. */
+  private makeDraggable(handle: HTMLElement): void {
+    const win = this.modalEl;
+    let dx = 0;
+    let dy = 0;
+    handle.addClass("wf-drag-handle");
+    handle.addEventListener("pointerdown", (down: PointerEvent) => {
+      if (down.button !== 0 || (down.target as HTMLElement).closest("a, button")) return;
+      down.preventDefault();
+      const startX = down.clientX - dx;
+      const startY = down.clientY - dy;
+      handle.setPointerCapture(down.pointerId);
+      const move = (ev: PointerEvent): void => {
+        dx = ev.clientX - startX;
+        dy = ev.clientY - startY;
+        win.style.translate = `${dx}px ${dy}px`;
+      };
+      const up = (): void => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
   }
 
   onClose(): void {

@@ -269,6 +269,7 @@ body.theme-light .wayfinder-view {
 /* ── modal ── */
 .wf-modal .wf-modal-title { font-weight: 700; font-size: 1.05em; margin-top: 0.3rem; }
 .wf-modal-head { margin-bottom: 0.6rem; }
+.wf-drag-handle { cursor: move; user-select: none; touch-action: none; }
 .wf-modal-state { margin-left: auto; font-size: 0.72em; color: var(--text-muted); }
 .wf-modal-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.4rem 0 0.8rem; }
 .wf-modal-progress { margin-bottom: 0.6rem; }
