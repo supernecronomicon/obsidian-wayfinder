@@ -138,6 +138,7 @@ body.theme-light .wayfinder-view {
   padding-inline: 1.5rem; box-sizing: border-box;
 }
 .wf-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.wf-edge { transition: opacity 180ms ease, stroke 180ms ease, stroke-width 180ms ease; }
 .wf-edge-frontier { stroke: var(--wf-grilling); stroke-width: 1.8; }
 .wf-edge-open { stroke: var(--text-faint); stroke-width: 1.2; }
 .wf-edge-closed { stroke: var(--background-modifier-border); stroke-width: 1.2; }
@@ -170,6 +171,9 @@ body.theme-light .wayfinder-view {
   border-left: 3px solid var(--tc, var(--text-faint));
   border-radius: 7px; padding: 0.45rem 0.55rem 0.5rem;
   display: flex; flex-direction: column; gap: 0.28rem; cursor: pointer;
+  outline: 2px solid transparent; outline-offset: 2px;
+  transition: opacity 180ms ease, border-color 180ms ease, color 180ms ease,
+    background-color 180ms ease, box-shadow 180ms ease, outline-color 180ms ease;
 }
 .wf-ticket > .wf-card-main {
   display: flex; flex-direction: column; gap: 0.28rem;
@@ -282,6 +286,7 @@ body.theme-light .wayfinder-view {
 .wf-changed { animation: wf-flash 2.5s ease-out; }
 @media (prefers-reduced-motion: reduce) {
   .wf-changed { animation: none; }
+  .wf-ticket, .wf-edge, .wf-actions { transition: none; }
 }
 .wf-card-main:focus-visible {
   outline: 2px solid var(--interactive-accent); outline-offset: 1px;

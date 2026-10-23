@@ -1,6 +1,7 @@
 import { ItemView, Notice, Platform, Scope, WorkspaceLeaf, setIcon } from "obsidian";
 import { addIconActions, type TicketCardOptions } from "./cards";
 import { HoverCards, relativeTime } from "./hover";
+import { makeInteractive } from "./interaction";
 import { renderList } from "./list";
 import type WayfinderPlugin from "./main";
 import type { TakeableVerification } from "./main";
@@ -428,23 +429,6 @@ export class WayfinderView extends ItemView {
     window.open(node.url, "_blank");
   }
 
-  /** Make a card keyboard-operable: tabbable, Enter/Space activates. */
-  private makeInteractive(el: HTMLElement, activate: () => void): void {
-    el.setAttr("tabindex", "0");
-    el.setAttr("role", "button");
-    el.addEventListener("click", (e: MouseEvent) => {
-      if (e.target instanceof Element && e.target.closest(".wf-actions")) return;
-      activate();
-    });
-    el.addEventListener("keydown", (e: KeyboardEvent) => {
-      if (e.target !== el) return;
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        activate();
-      }
-    });
-  }
-
   private render(): void {
     const root = this.contentEl;
     const scrollTop = root.scrollTop;
@@ -686,7 +670,14 @@ export class WayfinderView extends ItemView {
     } else {
       this.selectedIssues.add(key);
     }
-    this.render();
+    // Keep the clicked surface mounted so a native double-click can finish.
+    for (const card of Array.from(this.contentEl.querySelectorAll<HTMLElement>(".wf-ticket"))) {
+      if (card.dataset.issueKey !== key) continue;
+      card.classList.toggle("wf-selected", this.selectedIssues.has(key));
+      card.querySelector(".wf-card-main")?.setAttr("aria-pressed", String(this.selectedIssues.has(key)));
+    }
+    this.contentEl.querySelector(".wf-selectbar")?.remove();
+    this.renderSelectBar(this.contentEl, this.shownModel());
   }
 
   private renderSelectBar(root: HTMLElement, model: Model): void {
@@ -806,7 +797,7 @@ export class WayfinderView extends ItemView {
         cls: "wf-orphan-why",
         text: t.parent === null ? "no “Part of #N” line" : `parent #${t.parent} is not a map`,
       });
-      this.makeInteractive(main, () => new TicketModal(this.app, this.plugin, t, null).open());
+      makeInteractive(main, () => new TicketModal(this.app, this.plugin, t, null).open());
     }
   }
 
@@ -869,7 +860,7 @@ export class WayfinderView extends ItemView {
     addIconActions(head, map.repo, map.issue, this.plugin, () =>
       new TicketModal(this.app, this.plugin, null, map).open(),
     );
-    this.makeInteractive(headMain, () => {
+    makeInteractive(headMain, () => {
       this.collapsedOverride.set(mapKey, expanded);
       this.render();
     });
@@ -925,7 +916,7 @@ export class WayfinderView extends ItemView {
       selectionMode: this.selectionMode,
       selected: (ticket) => this.selectedIssues.has(issueKey(ticket.repo, ticket.issue.number)),
       changed: (ticket) => this.changedSinceLastRender(ticket.repo, ticket.issue),
-      makeInteractive: (element, activate) => this.makeInteractive(element, activate),
+      makeInteractive,
       attachHover: (element, ticket, map) => this.hoverCards.attach(element, ticket, map),
       select: (ticket) => this.toggleTicketSelection(ticket),
     };

@@ -17,7 +17,7 @@ export interface TicketCardOptions {
   selectionMode: boolean;
   selected(ticket: Ticket): boolean;
   changed(ticket: Ticket): boolean;
-  makeInteractive(el: HTMLElement, activate: () => void): void;
+  makeInteractive(el: HTMLElement, activate: () => void, open?: () => void): void;
   attachHover(el: HTMLElement, ticket: Ticket, map: MapTree): void;
   select(ticket: Ticket): void;
   activateTicket?(ticket: Ticket): void;
@@ -81,9 +81,10 @@ export function renderTicketCard(
   }
   main.createDiv({ cls: "wf-meta", text: metaText });
 
+  const openDetails = (): void => new TicketModal(options.app, options.plugin, ticket, map).open();
   if (options.changed(ticket)) card.addClass("wf-changed");
   addIconActions(card, ticket.repo, ticket.issue, options.plugin,
-    options.activateTicket ? () => new TicketModal(options.app, options.plugin, ticket, map).open() : undefined,
+    options.activateTicket ? openDetails : undefined,
     ticket.frontier);
   options.makeInteractive(main, () => {
     if (options.selectionMode && ticket.frontier) {
@@ -94,8 +95,14 @@ export function renderTicketCard(
       options.activateTicket(ticket);
       return;
     }
-    new TicketModal(options.app, options.plugin, ticket, map).open();
-  });
+    openDetails();
+  }, options.activateTicket ? () => {
+    if (options.selectionMode && ticket.frontier && !options.selected(ticket)) {
+      options.select(ticket);
+    }
+    options.activateTicket!(ticket);
+    openDetails();
+  } : undefined);
   options.attachHover(card, ticket, map);
   card.addEventListener("contextmenu", (event) => {
     if (!options.plugin.canSetPriority(ticket.repo)) return;
