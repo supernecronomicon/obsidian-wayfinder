@@ -30,12 +30,15 @@ export function renderTicketCard(
   map: MapTree,
   options: TicketCardOptions,
 ): void {
-  const card = root.createDiv({
+  const closed = ticket.issue.state === "closed";
+  const container = closed
+    ? root.createDiv({ cls: `wf-closed-backing${options.asRow ? " wf-ticket-row" : ""}` })
+    : root;
+  const card = container.createDiv({
     cls: `wf-ticket wf-t-${ticket.type}${options.asRow ? " wf-ticket-row" : ""}`,
   });
   card.dataset.issue = String(ticket.issue.number);
   card.dataset.issueKey = issueKey(ticket.repo, ticket.issue.number);
-  const closed = ticket.issue.state === "closed";
   const blocked = !closed && ticket.openBlockers.length > 0;
   if (closed) card.addClass("wf-closed");
   if (blocked) card.addClass("wf-blocked");

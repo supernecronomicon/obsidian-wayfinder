@@ -25,7 +25,8 @@ export function renderTree(
     if (nodes.length === 0) return;
     const layer = tree.createDiv({ cls: "wf-layer wf-ghost-layer", attr: { "aria-label": label } });
     for (const node of nodes) {
-      const card = layer.createDiv({ cls: `wf-ticket wf-ghost${node.state === "closed" ? " wf-closed" : ""}` });
+      const container = node.state === "closed" ? layer.createDiv({ cls: "wf-closed-backing" }) : layer;
+      const card = container.createDiv({ cls: `wf-ticket wf-ghost${node.state === "closed" ? " wf-closed" : ""}` });
       card.dataset.issueKey = node.key;
       const main = card.createDiv({ cls: "wf-card-main" });
       const location = node.map ? `#${node.map.number} ${node.map.title} · ${node.repo}` : node.repo;

@@ -299,6 +299,12 @@ body.theme-light .wayfinder-view {
   outline: 2px solid var(--interactive-accent); outline-offset: 1px;
 }
 
+/* Keep the content/border fade on the card, outside the backing's compositing
+   layer. A 40% backing plus the 50% card fill leaves 30% of a line visible. */
+.wf-closed-backing {
+  display: flex; border-radius: 7px;
+  background: color-mix(in srgb, var(--background-primary) 40%, transparent);
+}
 .wf-closed { opacity: 0.5; }
 .wf-closed .wf-ticket-title { text-decoration: line-through; text-decoration-color: var(--text-faint); }
 .wf-blocked { border-style: dashed; border-left-style: solid; }
