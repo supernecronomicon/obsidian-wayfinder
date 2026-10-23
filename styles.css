@@ -167,6 +167,9 @@ body.theme-light .wayfinder-view {
 .wf-ticket.wf-dependency-selected { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
 .wf-edge.wf-dependency-active { stroke: var(--interactive-accent); stroke-width: 2.5; }
 .wf-ticket.wf-dependency-dim, .wf-edge.wf-dependency-dim { opacity: 0.2; animation: none; }
+/* A line that touches a resolved card keeps its colour but recedes, so lines
+   between open cards draw the eye. */
+.wf-edge.wf-edge-faded:not(.wf-dependency-dim) { opacity: 0.4; }
 
 /* ── ticket cards ── */
 .wf-ticket {
@@ -300,10 +303,10 @@ body.theme-light .wayfinder-view {
 }
 
 /* Keep the content/border fade on the card, outside the backing's compositing
-   layer. A 40% backing plus the 50% card fill leaves 30% of a line visible. */
+   layer. A 65% backing plus the 50% card fill leaves about 18% of a line visible. */
 .wf-closed-backing {
   display: flex; border-radius: 7px;
-  background: color-mix(in srgb, var(--background-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--background-primary) 65%, transparent);
 }
 .wf-closed { opacity: 0.5; }
 .wf-closed .wf-ticket-title { text-decoration: line-through; text-decoration-color: var(--text-faint); }

@@ -111,6 +111,7 @@ function drawEdge(svg: SVGSVGElement, treeRect: DOMRect, from: HTMLElement, to: 
   path.setAttr("fill", "none");
   path.setAttr("class", `wf-edge ${to.hasClass("wf-frontier") ? "wf-edge-frontier" : to.hasClass("wf-closed") ? "wf-edge-closed" : "wf-edge-open"}`);
   if (to.hasClass("wf-blocked")) path.classList.add("wf-edge-blocked");
+  if (from.hasClass("wf-closed") || to.hasClass("wf-closed")) path.classList.add("wf-edge-faded");
   return path;
 }
 
