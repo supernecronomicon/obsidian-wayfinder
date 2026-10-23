@@ -9,15 +9,17 @@ import { mapLabel, type SearchHit } from "./search";
 import { TicketSearchModal } from "./search-modal";
 import {
   buildModel,
+  dependencyGraph,
   issueKey,
   mergeModels,
   type MapTree,
   type Model,
   type RawIssue,
   type Ticket,
+  type DependencyNode,
 } from "./model";
 import { renderToolbar, type MapChoice, type ToolbarControls } from "./toolbar";
-import { drawAllEdges, renderTree } from "./tree";
+import { drawAllEdges, highlightDependencies, renderTree } from "./tree";
 import { parseViewMode, projectView, type ViewMode } from "./view-state";
 
 export const VIEW_TYPE_WAYFINDER = "wayfinder-maps-view";
@@ -37,6 +39,8 @@ export class WayfinderView extends ItemView {
   /** View-local delegation selection; never persisted. */
   private selectionMode = false;
   private selectedIssues = new Set<string>();
+  private dependencySelection: string | null = null;
+  private dependencyHover: string | null = null;
 
   /** Per-device (localStorage, not synced): phones default to list, desktops to tree. */
   private get mode(): ViewMode {
@@ -88,6 +92,10 @@ export class WayfinderView extends ItemView {
       this.openSearch();
       return false;
     });
+    this.scope.register([], "Escape", () => {
+      this.clearDependencyHighlight();
+      return false;
+    });
   }
 
   /** Search every configured repo, even ones hidden by the repo filter. */
@@ -132,7 +140,7 @@ export class WayfinderView extends ItemView {
 
     const key = issueKey(ticket.repo, ticket.issue.number);
     const card = Array.from(
-      this.contentEl.querySelectorAll<HTMLElement>("[data-issue-key]"),
+      this.contentEl.querySelectorAll<HTMLElement>("[data-issue-key]:not(.wf-ghost)"),
     ).find((el) => el.dataset.issueKey === key);
     if (!card) {
       new Notice(`Wayfinder: #${ticket.issue.number} is not on the map.`);
@@ -173,6 +181,7 @@ export class WayfinderView extends ItemView {
     );
     this.startPolling();
     this.registerZoomGestures();
+    this.registerDependencyHighlight();
     // Coming back from sleep/background: sync immediately if data is stale.
     this.registerDomEvent(window, "focus", () => {
       const fetchedAt = this.configuredRepos
@@ -316,7 +325,7 @@ export class WayfinderView extends ItemView {
 
   private snapshotKey(): string {
     const shownRepos = this.shownRepos;
-    const snapshots = shownRepos.map((repo) => {
+    const snapshots = this.configuredRepos.map((repo) => {
       const snapshot = this.plugin.snapshots[repo];
       if (!snapshot) return [repo, null];
       return [
@@ -328,7 +337,8 @@ export class WayfinderView extends ItemView {
               `${issue.number}:${issue.updated_at}:${issue.state}:${issue.assignees.join(",")}:${issue.labels.join(",")}`,
           ),
           parents: snapshot.parents,
-          deps: snapshot.deps,
+           deps: snapshot.deps,
+          dependants: snapshot.dependants,
         },
       ];
     });
@@ -365,9 +375,57 @@ export class WayfinderView extends ItemView {
 
   private scheduleEdges(): void {
     window.cancelAnimationFrame(this.edgeRaf);
-    this.edgeRaf = window.requestAnimationFrame(() =>
-      drawAllEdges(this.contentEl, this.plugin.snapshots),
-    );
+    this.edgeRaf = window.requestAnimationFrame(() => {
+      drawAllEdges(this.contentEl);
+      this.updateDependencyHighlight();
+    });
+  }
+
+  private updateDependencyHighlight(): void {
+    highlightDependencies(this.contentEl, this.dependencySelection ?? this.dependencyHover);
+  }
+
+  private clearDependencyHighlight(): void {
+    this.dependencySelection = null;
+    this.dependencyHover = null;
+    this.updateDependencyHighlight();
+  }
+
+  private registerDependencyHighlight(): void {
+    const cardAt = (target: EventTarget | null): HTMLElement | null =>
+      target instanceof Element ? target.closest<HTMLElement>(".wf-ticket[data-issue-key]") : null;
+    this.registerDomEvent(this.contentEl, "pointerover", (event) => {
+      this.dependencyHover = cardAt(event.target)?.dataset.issueKey ?? null;
+      this.updateDependencyHighlight();
+    });
+    this.registerDomEvent(this.contentEl, "pointerout", (event) => {
+      this.dependencyHover = cardAt(event.relatedTarget)?.dataset.issueKey ?? null;
+      this.updateDependencyHighlight();
+    });
+    this.registerDomEvent(this.contentEl, "click", (event) => {
+      const card = cardAt(event.target);
+      if (card) this.dependencySelection = card.dataset.issueKey ?? null;
+      else this.clearDependencyHighlight();
+      this.updateDependencyHighlight();
+    }, true);
+    this.registerDomEvent(this.contentEl, "keydown", (event) => {
+      if (event.key === "Escape") this.clearDependencyHighlight();
+    });
+  }
+
+  private openGhost(node: DependencyNode): void {
+    for (const repo of this.configuredRepos) {
+      const snapshot = this.plugin.snapshots[repo];
+      if (!snapshot) continue;
+      const model = buildModel(snapshot);
+      const map = model.maps.find((map) => map.tickets.some((ticket) => issueKey(ticket.repo, ticket.issue.number) === node.key));
+      const ticket = map?.tickets.find((ticket) => issueKey(ticket.repo, ticket.issue.number) === node.key);
+      if (map && ticket) {
+        this.revealTicket({ ticket, map });
+        return;
+      }
+    }
+    window.open(node.url, "_blank");
   }
 
   /** Make a card keyboard-operable: tabbable, Enter/Space activates. */
@@ -400,6 +458,7 @@ export class WayfinderView extends ItemView {
     root.addClass("wayfinder-view");
     root.classList.toggle("wf-selecting", this.selectionMode);
     this.hoverCards.clear();
+    this.dependencyHover = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = new ResizeObserver(() => {
       this.scheduleEdges();
@@ -834,7 +893,7 @@ export class WayfinderView extends ItemView {
     }
 
     if (this.mode === "tree") {
-      const tree = renderTree(section, map, this.ticketCardOptions());
+      const tree = this.renderDependencyTree(section, map);
       this.resizeObserver?.observe(tree);
       return;
     }
@@ -842,11 +901,21 @@ export class WayfinderView extends ItemView {
     const hybrid = section.createDiv({ cls: "wf-hybrid" });
     const dependencies = hybrid.createDiv({ cls: "wf-hybrid-pane" });
     dependencies.createDiv({ cls: "wf-pane-heading", text: "Dependencies" });
-    const tree = renderTree(dependencies, map, this.ticketCardOptions());
+    const tree = this.renderDependencyTree(dependencies, map);
     this.resizeObserver?.observe(tree);
     const actionability = hybrid.createDiv({ cls: "wf-hybrid-pane" });
     actionability.createDiv({ cls: "wf-pane-heading", text: "Actionability" });
     renderList(actionability, map, this.ticketCardOptions());
+  }
+
+  private renderDependencyTree(section: HTMLElement, map: MapTree): HTMLElement {
+    const snapshots = this.configuredRepos.flatMap((repo) => this.plugin.snapshots[repo] ? [this.plugin.snapshots[repo]] : []);
+    return renderTree(section, map, this.ticketCardOptions(), dependencyGraph(map, snapshots),
+      (node) => this.openGhost(node),
+      (key) => {
+        this.dependencySelection = key;
+        this.updateDependencyHighlight();
+      });
   }
 
   private ticketCardOptions(): Omit<TicketCardOptions, "asRow"> {

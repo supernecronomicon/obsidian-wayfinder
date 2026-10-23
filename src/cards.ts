@@ -20,6 +20,7 @@ export interface TicketCardOptions {
   makeInteractive(el: HTMLElement, activate: () => void): void;
   attachHover(el: HTMLElement, ticket: Ticket, map: MapTree): void;
   select(ticket: Ticket): void;
+  activateTicket?(ticket: Ticket): void;
 }
 
 /** Shared ticket card used by both tree layers and list groups. */
@@ -81,10 +82,16 @@ export function renderTicketCard(
   main.createDiv({ cls: "wf-meta", text: metaText });
 
   if (options.changed(ticket)) card.addClass("wf-changed");
-  addIconActions(card, ticket.repo, ticket.issue, options.plugin, undefined, ticket.frontier);
+  addIconActions(card, ticket.repo, ticket.issue, options.plugin,
+    options.activateTicket ? () => new TicketModal(options.app, options.plugin, ticket, map).open() : undefined,
+    ticket.frontier);
   options.makeInteractive(main, () => {
     if (options.selectionMode && ticket.frontier) {
       options.select(ticket);
+      return;
+    }
+    if (options.activateTicket) {
+      options.activateTicket(ticket);
       return;
     }
     new TicketModal(options.app, options.plugin, ticket, map).open();

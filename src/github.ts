@@ -4,7 +4,7 @@
  */
 
 import type { BlockerRef, DepEntry, RawIssue, Snapshot } from "./model";
-import { priorityLevelOf, wayfinderType, type PriorityLevel } from "./model";
+import { parentOf, priorityLevelOf, wayfinderType, type PriorityLevel } from "./model";
 
 export interface HttpResponse {
   status: number;
@@ -83,6 +83,7 @@ export interface IssueListResult {
 export class GitHubClient {
   private dependencyErrorMessage: string | null = null;
   private repositoryIdentity: { repo: string; canonical: string } | null = null;
+  private dependencyMaps = new Map<string, Promise<BlockerRef["map"]>>();
 
   constructor(private config: () => GitHubConfig, private http: Http) {}
 
@@ -168,10 +169,18 @@ export class GitHubClient {
   }
 
   async blockedBy(issueNumber: number): Promise<BlockerRef[] | null> {
+    return this.dependencies(issueNumber, "blocked_by");
+  }
+
+  async blocking(issueNumber: number): Promise<BlockerRef[] | null> {
+    return this.dependencies(issueNumber, "blocking");
+  }
+
+  private async dependencies(issueNumber: number, direction: "blocked_by" | "blocking"): Promise<BlockerRef[] | null> {
     const issues: BlockerRef[] = [];
     for (let page = 1; page <= 10; page++) {
       const res = await this.get(
-        `/issues/${issueNumber}/dependencies/blocked_by?per_page=100&page=${page}`,
+        `/issues/${issueNumber}/dependencies/${direction}?per_page=100&page=${page}`,
       );
       if (res.status === 404) return [];
       if (res.status !== 200) {
@@ -186,16 +195,42 @@ export class GitHubClient {
         number: number;
         state?: string;
         repository?: { full_name?: string } | null;
+        title?: string;
+        html_url?: string;
+        body?: string | null;
+        parent_issue_url?: string | null;
       }[];
-      issues.push(
-        ...batch.map((issue) => {
-          const ref: BlockerRef = { number: issue.number };
-          if (issue.state === "open" || issue.state === "closed") ref.state = issue.state;
-          const repo = issue.repository?.full_name;
-          if (repo) ref.repo = repo;
-          return this.normalizeBlocker(ref);
-        }),
-      );
+      // The snapshot's worker pool bounds concurrent metadata lookups as well.
+      for (const issue of batch) {
+        const ref: BlockerRef = { number: issue.number };
+        if (issue.state === "open" || issue.state === "closed") ref.state = issue.state;
+        const repo = issue.repository?.full_name ?? issue.html_url?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\//)?.[1];
+        if (repo) ref.repo = repo;
+        if (issue.title) ref.title = issue.title;
+        if (issue.html_url) ref.html_url = issue.html_url;
+        const normalized = this.normalizeBlocker(ref);
+        const parent = Number(issue.parent_issue_url?.match(/\/issues\/(\d+)$/)?.[1]) || parentOf(issue.body ?? null);
+        if (parent || normalized.repo) {
+          const parentRepo = repo ?? this.repo;
+          const key = `${parentRepo}#${normalized.repo ? `parent-of-${issue.number}` : parent}`;
+          let lookup = this.dependencyMaps.get(key);
+          if (!lookup) {
+            const path = normalized.repo ? `/issues/${issue.number}/parent` : `/issues/${parent}`;
+            lookup = this.http(`${API}/repos/${parentRepo}${path}`, this.headers()).then(async (res) => {
+              if (res.status === 404 && parent && normalized.repo) {
+                res = await this.http(`${API}/repos/${parentRepo}/issues/${parent}`, this.headers());
+              }
+              if (res.status !== 200) return undefined;
+              const issue = toRawIssue(res.json as Record<string, unknown>);
+              return wayfinderType(issue.labels) === "map" ? { number: issue.number, title: issue.title } : undefined;
+            }).catch(() => undefined);
+            this.dependencyMaps.set(key, lookup);
+          }
+          const map = await lookup;
+          if (map) normalized.map = map;
+        }
+        issues.push(normalized);
+      }
       if (batch.length < 100) break;
     }
     return issues;
@@ -264,6 +299,7 @@ export class GitHubClient {
 
   resetDependencyErrors(): void {
     this.dependencyErrorMessage = null;
+    this.dependencyMaps.clear();
   }
 
   dependencyError(): string | null {
@@ -349,6 +385,12 @@ export async function fetchSnapshot(
   }
 
   const deps: Record<string, DepEntry> = {};
+  const dependants: Record<string, BlockerRef[]> = Object.fromEntries(
+    targets.flatMap((issue) => {
+      const cached = prev?.dependants?.[String(issue.number)];
+      return cached ? [[String(issue.number), cached]] : [];
+    }),
+  );
   const stale = targets.filter((i) => {
     const prevDep = prev?.deps[String(i.number)];
     if (!full && prevDep && !prevDep.unverified && prevDep.updatedAt === i.updated_at) {
@@ -374,6 +416,11 @@ export async function fetchSnapshot(
         blockedBy === null
           ? { ...(prev?.deps[key] ?? { updatedAt: "", blockedBy: [] }), unverified: true }
           : { updatedAt: issue.updated_at, blockedBy };
+      if (blockedBy !== null) {
+        const blocking = await gh.blocking(issue.number);
+        if (blocking !== null) dependants[key] = blocking;
+        else onWarning?.(`Couldn't refresh dependants for #${issue.number} — cross-map lines may be stale`);
+      }
     }
   });
   await Promise.all(workers);
@@ -396,5 +443,6 @@ export async function fetchSnapshot(
     issues,
     deps,
     parents,
+    dependants,
   };
 }

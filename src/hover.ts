@@ -59,7 +59,9 @@ export class HoverCards {
       card.createDiv({
         cls: "wf-hc-cta",
         text: ticket
-          ? "Click for details + comments · ⧉ copies /wayfinder · ↗ opens GitHub"
+          ? el.closest(".wf-tree")
+            ? "Click to highlight dependencies · ⓘ details + comments · Esc clears highlight"
+            : "Click for details + comments · ⧉ copies /wayfinder · ↗ opens GitHub"
           : "Click to expand/collapse · ⓘ details + comments · ⧉ copies /wayfinder",
       });
 

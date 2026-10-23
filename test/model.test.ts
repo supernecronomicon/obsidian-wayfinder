@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildModel,
+  dependencyGraph,
   blockerLabel,
   hasConflictingLabels,
   issueKey,
@@ -244,6 +245,87 @@ test("mergeModels sums tallies and orders maps and orphans across repositories",
   assert.equal(merged.totalOpen, 16);
   assert.equal(merged.fetchedAt, 123);
   assert.equal(mergeModels([]).fetchedAt, 0);
+});
+
+test("dependency graph includes cross-map blockers, orphan blockers, and reverse dependants", () => {
+  const snap = syntheticSnapshot();
+  snap.issues.push(issue(201, ["wayfinder:task"], { body: "Part of #200", state: "closed" }));
+  snap.deps["101"].blockedBy = [{ number: 201 }, { number: 110 }];
+  snap.deps["201"] = { updatedAt: "", blockedBy: [{ number: 102 }] };
+  const map = buildModel(snap).maps.find((map) => map.issue.number === 100)!;
+  const graph = dependencyGraph(map, [snap]);
+  const external = graph.nodes.filter((node) => node.ghost);
+  assert.deepEqual(external.map((node) => node.number).sort((a, b) => a - b), [110, 201, 999]);
+  assert.equal(external.find((node) => node.number === 201)?.map?.title, "Issue 200");
+  assert.equal(external.find((node) => node.number === 201)?.state, "closed");
+  assert.equal(external.find((node) => node.number === 110)?.map, null);
+  assert.ok(graph.edges.some((edge) => edge.from === "owner/repo#102" && edge.to === "owner/repo#201" && edge.ghost));
+  assert.ok(graph.edges.some((edge) => edge.from === "owner/repo#101" && edge.to === "owner/repo#102" && !edge.ghost));
+  assert.equal(map.tickets.find((ticket) => ticket.issue.number === 101)?.frontier, false);
+  assert.equal(map.tickets.find((ticket) => ticket.issue.number === 101)?.layer, 0);
+});
+
+test("cross-repository ghosts use loaded metadata and canonical aliases without number collisions", () => {
+  const snap = syntheticSnapshot();
+  const other: Snapshot = {
+    ...syntheticSnapshot(), repo: "old/repo", parents: { "101": 100 },
+    issues: [
+      issue(100, ["wayfinder:map"], { title: "External map" }),
+      issue(101, ["wayfinder:task"], { html_url: "https://github.com/new/repo/issues/101", title: "External blocker" }),
+    ],
+    deps: { "101": { updatedAt: "", blockedBy: [{ number: 102, repo: "OWNER/REPO" }] } },
+  };
+  snap.deps["102"].blockedBy.push({ number: 101, repo: "NEW/REPO", state: "open" });
+  const map = buildModel(snap).maps.find((map) => map.issue.number === 100)!;
+  const graph = dependencyGraph(map, [snap, other]);
+  const ghost = graph.nodes.find((node) => node.key === "old/repo#101")!;
+  assert.equal(ghost.title, "External blocker");
+  assert.equal(ghost.map?.title, "External map");
+  assert.equal(ghost.url, "https://github.com/new/repo/issues/101");
+  assert.equal(graph.nodes.find((node) => node.key === "owner/repo#101")?.ghost, false);
+  assert.equal(graph.edges.filter((edge) => edge.from === ghost.key || edge.to === ghost.key).length, 2);
+  assert.ok(map.tickets.find((ticket) => ticket.issue.number === 102)?.openBlockers.some((ref) => ref.repo === "NEW/REPO"));
+});
+
+test("unloaded references retain labels, state, URL and map, and reverse edges are deduplicated", () => {
+  const snap = syntheticSnapshot();
+  const external = { number: 7, repo: "other/repo", title: "Remote work", state: "open" as const,
+    html_url: "https://github.com/other/repo/issues/7", map: { number: 1, title: "Remote map" } };
+  snap.deps["101"].blockedBy.push(external, external);
+  snap.dependants = { "102": [external, { number: 8, repo: "other/repo", state: "closed", title: "No map" }] };
+  const graph = dependencyGraph(buildModel(snap).maps.find((map) => map.issue.number === 100)!, [snap]);
+  assert.equal(graph.edges.filter((edge) => edge.from === "other/repo#7").length, 1);
+  assert.equal(graph.edges.filter((edge) => edge.to.startsWith("other/repo#")).length, 2);
+  const ghost = graph.nodes.find((node) => node.key === "other/repo#7")!;
+  assert.equal(ghost.map?.title, "Remote map");
+  assert.equal(ghost.title, "Remote work");
+  assert.equal(ghost.state, "open");
+  assert.equal(ghost.url, external.html_url);
+  assert.equal(graph.nodes.find((node) => node.key === "other/repo#8")?.map, null);
+});
+
+test("filtered in-map tickets are not ghosts and stale reverse entries cannot restore removed edges", () => {
+  const snap = syntheticSnapshot();
+  snap.dependants = { "101": [{ number: 104 }] };
+  const model = buildModel(snap);
+  const map = model.maps.find((map) => map.issue.number === 100)!;
+  const filtered = { ...map, tickets: map.tickets.filter((ticket) => ticket.issue.number !== 102) };
+  const graph = dependencyGraph(filtered, [snap]);
+  assert.ok(!graph.nodes.some((node) => node.key === "owner/repo#102"));
+  assert.ok(!graph.edges.some((edge) => edge.from === "owner/repo#101" && edge.to === "owner/repo#104"));
+  assert.equal(snap.dependants["101"].length, 1);
+});
+
+test("foreign blockers affect readiness by state without changing in-map layering", () => {
+  const snap = syntheticSnapshot();
+  for (const state of ["open", "closed", undefined] as const) {
+    snap.deps["101"].blockedBy = [{ number: 101, repo: "other/repo", state }];
+    const ticket = buildModel(snap).maps.find((map) => map.issue.number === 100)!.tickets.find((ticket) => ticket.issue.number === 101)!;
+    assert.equal(ticket.frontier, state === "closed");
+    assert.equal(ticket.openBlockers.length, state === "closed" ? 0 : 1);
+    assert.equal(ticket.layer, 0);
+    assert.deepEqual(ticket.blockedBy, []);
+  }
 });
 
 function syntheticSnapshot(): Snapshot {

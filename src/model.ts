@@ -38,6 +38,9 @@ export interface BlockerRef {
   number: number;
   state?: "open" | "closed";
   repo?: string;
+  title?: string;
+  html_url?: string;
+  map?: { number: number; title: string };
 }
 
 export interface DepEntry {
@@ -55,6 +58,8 @@ export interface Snapshot {
   deps: Record<string, DepEntry>;
   /** child issue number -> map issue number, from GitHub native sub-issues */
   parents: Record<string, number>;
+  /** Native reverse dependencies, including issues in repositories not loaded here. */
+  dependants?: Record<string, BlockerRef[]>;
 }
 
 export interface Ticket {
@@ -301,6 +306,93 @@ export function mergeModels(models: Model[]): Model {
     totalOpen: models.reduce((total, model) => total + model.totalOpen, 0),
     fetchedAt: models.length > 0 ? Math.min(...models.map((model) => model.fetchedAt)) : 0,
   };
+}
+
+export interface DependencyNode {
+  key: string;
+  repo: string;
+  number: number;
+  title: string;
+  state: "open" | "closed" | "unknown";
+  url: string;
+  map: { number: number; title: string } | null;
+  ghost: boolean;
+}
+
+export interface DependencyEdge {
+  from: string;
+  to: string;
+  ghost: boolean;
+}
+
+export interface DependencyGraph {
+  nodes: DependencyNode[];
+  edges: DependencyEdge[];
+}
+
+/** Repository-qualified graph; filters never turn hidden in-map tickets into ghosts. */
+export function dependencyGraph(map: MapTree, snapshots: Snapshot[]): DependencyGraph {
+  const repos = new Map<string, Snapshot>();
+  const issues = new Map<Snapshot, Map<number, RawIssue>>();
+  for (const snap of snapshots) {
+    issues.set(snap, new Map(snap.issues.map((issue) => [issue.number, issue])));
+    repos.set(snap.repo.toLowerCase(), snap);
+    // Configured names can predate a repository rename; issue URLs are canonical.
+    for (const issue of snap.issues) {
+      const canonical = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\//.exec(issue.html_url)?.[1];
+      if (canonical) repos.set(canonical.toLowerCase(), snap);
+    }
+  }
+  const resolve = (repo: string): string => repos.get(repo.toLowerCase())?.repo ?? repo.toLowerCase();
+  const keyOf = (repo: string, number: number): string => issueKey(resolve(repo), number);
+  const local = new Set(map.tickets.map((ticket) => keyOf(ticket.repo, ticket.issue.number)));
+  const nodes = new Map<string, DependencyNode>();
+  const edges = new Map<string, DependencyEdge>();
+  const node = (repo: string, ref: BlockerRef): DependencyNode => {
+    repo = resolve(ref.repo ?? repo);
+    const key = keyOf(repo, ref.number);
+    const snap = repos.get(repo.toLowerCase());
+    const issue = snap ? issues.get(snap)?.get(ref.number) : undefined;
+    const parent = snap?.parents[String(ref.number)] ?? parentOf(issue?.body ?? null);
+    const parentIssue = snap && parent !== null ? issues.get(snap)?.get(parent) : undefined;
+    const parentMap = parentIssue && wayfinderType(parentIssue.labels) === "map" ? parentIssue : undefined;
+    const previous = nodes.get(key);
+    return {
+      key, repo, number: ref.number,
+      title: issue?.title ?? ref.title ?? previous?.title ?? "Issue details unavailable",
+      state: issue?.state ?? ref.state ?? previous?.state ?? "unknown",
+      url: issue?.html_url ?? ref.html_url ?? previous?.url ?? `https://github.com/${repo}/issues/${ref.number}`,
+      map: parentMap ? { number: parentMap.number, title: parentMap.title } : ref.map ?? previous?.map ?? null,
+      ghost: !local.has(key),
+    };
+  };
+  const add = (from: DependencyNode, to: DependencyNode): void => {
+    if (!local.has(from.key) && !local.has(to.key)) return;
+    // A filtered-out ticket in this map is intentionally invisible.
+    if ([from, to].some((entry) => entry.ghost && entry.repo === map.repo && entry.map?.number === map.issue.number)) return;
+    nodes.set(from.key, from);
+    nodes.set(to.key, to);
+    edges.set(`${from.key}>${to.key}`, { from: from.key, to: to.key, ghost: from.ghost || to.ghost });
+  };
+  for (const ticket of map.tickets) {
+    const entry = node(ticket.repo, { number: ticket.issue.number });
+    nodes.set(entry.key, entry);
+  }
+  for (const snap of snapshots) {
+    for (const [number, dep] of Object.entries(snap.deps)) {
+      for (const blocker of dep.blockedBy) add(node(snap.repo, blocker), node(snap.repo, { number: Number(number) }));
+    }
+    for (const [number, refs] of Object.entries(snap.dependants ?? {})) {
+      for (const dependant of refs) {
+        const targetRepo = resolve(dependant.repo ?? snap.repo);
+        const targetSnap = repos.get(targetRepo.toLowerCase());
+        // The loaded ticket's blocked-by list is authoritative when available.
+        if (targetSnap?.deps[String(dependant.number)] && !targetSnap.deps[String(dependant.number)].unverified) continue;
+        add(node(snap.repo, { number: Number(number) }), node(snap.repo, dependant));
+      }
+    }
+  }
+  return { nodes: [...nodes.values()], edges: [...edges.values()] };
 }
 
 /** Count unique open descendants in the map's inverted blocking graph. */

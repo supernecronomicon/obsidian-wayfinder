@@ -135,6 +135,74 @@ test("dependency 404 maps to empty while sub-issue 404 and other failures map to
   assert.equal(await gh.subIssues(4), null);
 });
 
+test("snapshot retains ghost metadata and native reverse dependencies for unloaded repositories", async () => {
+  const calls: string[] = [];
+  const gh = client(async (url) => {
+    calls.push(url);
+    if (url.includes("/issues?")) return response(200, [rawIssue(42)]);
+    if (url.includes("/blocked_by?")) return response(200, [{
+      number: 7, state: "open", title: "External blocker", body: "Part of #9",
+      html_url: "https://github.com/other/repo/issues/7",
+    }]);
+    if (url.includes("/blocking?")) return response(200, [{
+      number: 8, state: "closed", title: "External dependant",
+      repository: { full_name: "other/repo" },
+    }]);
+    if (url.endsWith("/other/repo/issues/9") || url.endsWith("/other/repo/issues/8/parent")) {
+      return response(200, rawIssue(9, ["wayfinder:map"], { title: "External map" }));
+    }
+    if (url.endsWith("/other/repo/issues/7/parent")) return response(404, {});
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  const snap = await fetchSnapshot(gh, null, false);
+  assert.deepEqual(snap.deps["42"].blockedBy, [{
+    number: 7, state: "open", title: "External blocker", repo: "other/repo",
+    html_url: "https://github.com/other/repo/issues/7", map: { number: 9, title: "External map" },
+  }]);
+  assert.deepEqual(snap.dependants?.["42"], [{
+    number: 8, state: "closed", title: "External dependant", repo: "other/repo",
+    map: { number: 9, title: "External map" },
+  }]);
+  assert.equal(buildModel(snap).orphans[0].frontier, false);
+  calls.length = 0;
+  const cached = await fetchSnapshot(gh, snap, false);
+  assert.deepEqual(cached.dependants, snap.dependants);
+  assert.equal(calls.some((url) => url.includes("/dependencies/")), false);
+});
+
+test("reverse-dependency failures preserve cached ghosts without changing readiness", async () => {
+  const warnings: string[] = [];
+  const prev: Snapshot = {
+    schemaVersion: 2, repo: "owner/repo", fetchedAt: 10, parents: {}, issues: [], deps: {},
+    dependants: { "42": [{ number: 7, repo: "other/repo", state: "open" }], "99": [{ number: 8 }] },
+  };
+  const snap = await fetchSnapshot(client(async (url) => {
+    if (url.includes("/issues?")) return response(200, [rawIssue(42)]);
+    if (url.includes("/blocked_by?")) return response(200, []);
+    if (url.includes("/blocking?")) return response(500, {});
+    throw new Error(`Unexpected request: ${url}`);
+  }), prev, true, (warning) => warnings.push(warning));
+  assert.deepEqual(snap.dependants, { "42": prev.dependants!["42"] });
+  assert.equal(buildModel(snap).orphans[0].frontier, true);
+  assert.deepEqual(warnings, ["Couldn't refresh dependants for #42 — cross-map lines may be stale"]);
+});
+
+test("reverse dependencies paginate and inaccessible parent metadata does not drop edges", async () => {
+  let pages = 0;
+  const refs = await client(async (url) => {
+    if (url.includes("/blocking?")) {
+      pages++;
+      return response(200, url.includes("page=2") ? [{ number: 101, state: "closed", repo: "ignored" }] :
+        Array.from({ length: 100 }, (_, index) => ({ number: index + 1, state: "open", repository: { full_name: "other/repo" } })));
+    }
+    if (url.endsWith("/parent")) return response(403, {});
+    throw new Error(`Unexpected request: ${url}`);
+  }).blocking(42);
+  assert.equal(pages, 2);
+  assert.equal(refs?.length, 101);
+  assert.deepEqual(refs?.[0], { number: 1, state: "open", repo: "other/repo" });
+});
+
 test("classifyError covers authentication, rate limits, permissions, missing repos, and servers", () => {
   assert.equal(
     classifyError(401, {}),
@@ -304,7 +372,7 @@ test("fetchSnapshot retries an unchanged cached dependency when it is unverified
     false,
   );
 
-  assert.equal(dependencyCalls, 1);
+  assert.equal(dependencyCalls, 2);
   assert.deepEqual(snap.deps["42"], {
     updatedAt: "2026-01-01T00:00:00Z",
     blockedBy: [{ number: 43, state: "open" }],
@@ -460,7 +528,7 @@ for (const configured of ["former/project", "CANONICAL/PROJECT"]) {
       assert.deepEqual(buildModel(snapshot).maps[0].layers.map(layer => layer.map(t => t.issue.number)), [[41], [42]]);
       assert.equal(snapshot.repo, configured);
       assert.equal(metadataCalls, 1);
-      assert.equal(dependencyCalls, cached ? 0 : 2);
+      assert.equal(dependencyCalls, cached ? 0 : 4);
       if (previous) assert.equal(previous.deps["42"].blockedBy[0].repo, canonical);
     });
   }
@@ -502,6 +570,6 @@ test("client identity and cached dependencies follow the configured repository",
   const snapshot = await fetchSnapshot(gh, previous, false);
   assert.deepEqual(snapshot.deps["42"].blockedBy, [{ number: 41, state: "open", repo: "canonical/project" }]);
   assert.deepEqual(metadata, ["former/project", "different/project"]);
-  assert.equal(dependencyCalls, 2);
+  assert.equal(dependencyCalls, 4);
   assert.equal(snapshot.lastFullSync, snapshot.fetchedAt);
 });

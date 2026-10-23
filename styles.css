@@ -135,12 +135,32 @@ body.theme-light .wayfinder-view {
 .wf-tree {
   position: relative; display: flex; flex-direction: column; gap: 2rem;
   align-items: center; width: max-content; min-width: 100%;
+  padding-inline: 1.5rem; box-sizing: border-box;
 }
 .wf-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .wf-edge-frontier { stroke: var(--wf-grilling); stroke-width: 1.8; }
 .wf-edge-open { stroke: var(--text-faint); stroke-width: 1.2; }
 .wf-edge-closed { stroke: var(--background-modifier-border); stroke-width: 1.2; }
 .wf-layer { display: flex; gap: 1rem; justify-content: center; position: relative; z-index: 1; }
+.wf-edge-ghost, .wf-edge-blocked { stroke-dasharray: 4 3; }
+.wf-ghost-layer { padding: 0.2rem; }
+.wf-ticket.wf-ghost {
+  --tc: var(--text-muted);
+  color: var(--text-muted); background: var(--background-primary-alt);
+  border-style: dashed; box-shadow: none;
+}
+.wf-ghost .wf-ticket-title {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.wf-ghost-location { font-size: 0.65em; overflow-wrap: anywhere; }
+.wf-ghost-state { margin-left: auto; font-size: 0.65em; }
+.wf-ticket.wf-dependency-active {
+  opacity: 1; border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent); animation: none;
+}
+.wf-ticket.wf-dependency-selected { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.wf-edge.wf-dependency-active { stroke: var(--interactive-accent); stroke-width: 2.5; }
+.wf-ticket.wf-dependency-dim, .wf-edge.wf-dependency-dim { opacity: 0.2; animation: none; }
 
 /* ── ticket cards ── */
 .wf-ticket {
