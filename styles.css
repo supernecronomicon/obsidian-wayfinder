@@ -8,6 +8,8 @@
   --wf-afk: #7ec8ff;
   --wf-hitl: #ffb680;
   --wf-orphan: #e3b341;
+  --wf-status-orange: var(--color-orange, #f0a05a);
+  --wf-status-green: var(--color-green, #70c878);
   padding: 0.75rem 1rem 2rem;
   overflow-y: auto;
   touch-action: pan-x pan-y; /* leave panning native; pinch is ours */
@@ -22,6 +24,8 @@ body.theme-light .wayfinder-view {
   --wf-afk: #0969da;
   --wf-hitl: #bc4c00;
   --wf-orphan: #9a6700;
+  --wf-status-orange: var(--color-orange, #a34b00);
+  --wf-status-green: var(--color-green, #217a38);
 }
 .wf-zoom-label {
   font-size: 0.72em; font-variant-numeric: tabular-nums;
@@ -159,6 +163,7 @@ body.theme-light .wayfinder-view {
   opacity: 1; border-color: var(--interactive-accent);
   box-shadow: 0 0 0 1px var(--interactive-accent); animation: none;
 }
+.wf-ticket.wf-dependency-active.wf-closed { opacity: 0.5; }
 .wf-ticket.wf-dependency-selected { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
 .wf-edge.wf-dependency-active { stroke: var(--interactive-accent); stroke-width: 2.5; }
 .wf-ticket.wf-dependency-dim, .wf-edge.wf-dependency-dim { opacity: 0.2; animation: none; }
@@ -199,6 +204,8 @@ body.theme-light .wayfinder-view {
 .wf-mode-hitl { color: var(--wf-hitl); border-color: color-mix(in srgb, var(--wf-hitl) 40%, transparent); }
 .wf-ticket-title { font-size: 0.78em; line-height: 1.3; font-weight: 500; }
 .wf-meta { font-size: 0.65em; color: var(--text-faint); }
+.wf-status-blocked { color: var(--wf-status-orange); }
+.wf-status-open { color: var(--wf-status-green); }
 .wf-actions {
   position: absolute; right: 0.35rem; bottom: 0.3rem;
   display: inline-flex; gap: 0.15rem;

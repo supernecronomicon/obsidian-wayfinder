@@ -79,7 +79,8 @@ export function renderTicketCard(
   if (!closed && ticket.downstreamImpact > 0) {
     metaText += ` · unblocks ${ticket.downstreamImpact}`;
   }
-  main.createDiv({ cls: "wf-meta", text: metaText });
+  const statusClass = blocked ? " wf-status-blocked" : ticket.frontier ? " wf-status-open" : "";
+  main.createDiv({ cls: `wf-meta${statusClass}`, text: metaText });
 
   const openDetails = (): void => new TicketModal(options.app, options.plugin, ticket, map).open();
   if (options.changed(ticket)) card.addClass("wf-changed");

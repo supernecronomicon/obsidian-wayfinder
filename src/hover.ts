@@ -60,7 +60,7 @@ export class HoverCards {
         cls: "wf-hc-cta",
         text: ticket
           ? el.closest(".wf-tree")
-            ? "Click or Enter/Space to highlight dependencies · Double-click or Shift+Enter for details + comments · ⓘ details · Esc clears highlight"
+            ? "Hover or click / Enter/Space to highlight all upstream/downstream dependencies across loaded maps · Double-click or Shift+Enter for details + comments · ⓘ details · Esc clears highlight"
             : "Click for details + comments · ⧉ copies /wayfinder · ↗ opens GitHub"
           : "Click to expand/collapse · ⓘ details + comments · ⧉ copies /wayfinder",
       });

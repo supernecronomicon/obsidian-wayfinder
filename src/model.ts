@@ -332,6 +332,23 @@ export interface DependencyGraph {
 
 /** Repository-qualified graph; filters never turn hidden in-map tickets into ghosts. */
 export function dependencyGraph(map: MapTree, snapshots: Snapshot[]): DependencyGraph {
+  const graph = loadedDependencyGraph(snapshots);
+  const local = new Set(map.tickets.map((ticket) => issueKey(ticket.repo, ticket.issue.number)));
+  const hidden = new Set(graph.nodes.filter((node) =>
+    !local.has(node.key) && node.repo === map.repo && node.map?.number === map.issue.number,
+  ).map((node) => node.key));
+  const edges = graph.edges.filter((edge) =>
+    (local.has(edge.from) || local.has(edge.to)) && !hidden.has(edge.from) && !hidden.has(edge.to),
+  );
+  const visible = new Set([...local, ...edges.flatMap((edge) => [edge.from, edge.to])]);
+  return {
+    nodes: graph.nodes.filter((node) => visible.has(node.key)).map((node) => ({ ...node, ghost: !local.has(node.key) })),
+    edges: edges.map((edge) => ({ ...edge, ghost: !local.has(edge.from) || !local.has(edge.to) })),
+  };
+}
+
+/** All known relationships, including those on hidden maps and repositories. */
+export function loadedDependencyGraph(snapshots: Snapshot[]): DependencyGraph {
   const repos = new Map<string, Snapshot>();
   const issues = new Map<Snapshot, Map<number, RawIssue>>();
   for (const snap of snapshots) {
@@ -345,7 +362,6 @@ export function dependencyGraph(map: MapTree, snapshots: Snapshot[]): Dependency
   }
   const resolve = (repo: string): string => repos.get(repo.toLowerCase())?.repo ?? repo.toLowerCase();
   const keyOf = (repo: string, number: number): string => issueKey(resolve(repo), number);
-  const local = new Set(map.tickets.map((ticket) => keyOf(ticket.repo, ticket.issue.number)));
   const nodes = new Map<string, DependencyNode>();
   const edges = new Map<string, DependencyEdge>();
   const node = (repo: string, ref: BlockerRef): DependencyNode => {
@@ -363,22 +379,19 @@ export function dependencyGraph(map: MapTree, snapshots: Snapshot[]): Dependency
       state: issue?.state ?? ref.state ?? previous?.state ?? "unknown",
       url: issue?.html_url ?? ref.html_url ?? previous?.url ?? `https://github.com/${repo}/issues/${ref.number}`,
       map: parentMap ? { number: parentMap.number, title: parentMap.title } : ref.map ?? previous?.map ?? null,
-      ghost: !local.has(key),
+      ghost: false,
     };
   };
   const add = (from: DependencyNode, to: DependencyNode): void => {
-    if (!local.has(from.key) && !local.has(to.key)) return;
-    // A filtered-out ticket in this map is intentionally invisible.
-    if ([from, to].some((entry) => entry.ghost && entry.repo === map.repo && entry.map?.number === map.issue.number)) return;
     nodes.set(from.key, from);
     nodes.set(to.key, to);
-    edges.set(`${from.key}>${to.key}`, { from: from.key, to: to.key, ghost: from.ghost || to.ghost });
+    edges.set(`${from.key}>${to.key}`, { from: from.key, to: to.key, ghost: false });
   };
-  for (const ticket of map.tickets) {
-    const entry = node(ticket.repo, { number: ticket.issue.number });
-    nodes.set(entry.key, entry);
-  }
   for (const snap of snapshots) {
+    for (const issue of snap.issues) {
+      const entry = node(snap.repo, { number: issue.number });
+      nodes.set(entry.key, entry);
+    }
     for (const [number, dep] of Object.entries(snap.deps)) {
       for (const blocker of dep.blockedBy) add(node(snap.repo, blocker), node(snap.repo, { number: Number(number) }));
     }
@@ -393,6 +406,33 @@ export function dependencyGraph(map: MapTree, snapshots: Snapshot[]): Dependency
     }
   }
   return { nodes: [...nodes.values()], edges: [...edges.values()] };
+}
+
+/** Trace each direction independently: shared blockers do not select sibling branches. */
+export function dependencyClosure(graph: DependencyGraph, key: string): Set<string> {
+  const upstream = new Map<string, string[]>();
+  const downstream = new Map<string, string[]>();
+  for (const { from, to } of graph.edges) {
+    let blockers = upstream.get(to);
+    if (!blockers) upstream.set(to, (blockers = []));
+    blockers.push(from);
+    let dependants = downstream.get(from);
+    if (!dependants) downstream.set(from, (dependants = []));
+    dependants.push(to);
+  }
+  const trace = (adjacent: Map<string, string[]>): Set<string> => {
+    const seen = new Set([key]);
+    const queue = [key];
+    for (let index = 0; index < queue.length; index++) {
+      for (const next of adjacent.get(queue[index]) ?? []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+    return seen;
+  };
+  return new Set([...trace(upstream), ...trace(downstream)]);
 }
 
 /** Count unique open descendants in the map's inverted blocking graph. */

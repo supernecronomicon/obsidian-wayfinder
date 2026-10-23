@@ -1,5 +1,5 @@
 import { renderTicketCard, type TicketCardOptions } from "./cards";
-import { issueKey, type DependencyGraph, type DependencyNode, type MapTree } from "./model";
+import { dependencyClosure, issueKey, type DependencyGraph, type DependencyNode, type MapTree } from "./model";
 
 const graphs = new WeakMap<HTMLElement, DependencyGraph>();
 
@@ -32,10 +32,14 @@ export function renderTree(
       main.setAttr("aria-label", `#${node.number} ${node.title}, ${node.state}, ${location}`);
       const row = main.createDiv({ cls: "wf-row1" });
       row.createSpan({ cls: "wf-num", text: `#${node.number}` });
-      row.createSpan({ cls: "wf-ghost-state", text: node.state });
+      row.createSpan({
+        cls: `wf-ghost-state${node.state === "open" ? " wf-status-open" : ""}`,
+        text: node.state === "open" ? "● open" : node.state,
+      });
       main.createDiv({ cls: "wf-ticket-title", text: node.title });
       main.createDiv({ cls: "wf-ghost-location", text: location });
-      cardOptions.makeInteractive(main, () => {
+      main.setAttr("title", "Click or Enter/Space to highlight all upstream/downstream dependencies · Double-click or Shift+Enter to navigate to this ticket · Esc clears highlight");
+      cardOptions.makeInteractive(main, () => selectNode(node.key), () => {
         selectNode(node.key);
         openGhost(node);
       });
@@ -109,17 +113,13 @@ function drawEdge(svg: SVGSVGElement, treeRect: DOMRect, from: HTMLElement, to: 
   return path;
 }
 
-/** Direct neighbours only: no accidental highlighting of neighbours' other edges. */
-export function highlightDependencies(root: HTMLElement, key: string | null): void {
-  const neighbours = new Set(key ? [key] : []);
+/** Resolve against loaded data, not only edges whose endpoints are currently drawn. */
+export function highlightDependencies(root: HTMLElement, key: string | null, graph: DependencyGraph): void {
+  const neighbours = key === null ? new Set<string>() : dependencyClosure(graph, key);
   for (const edge of Array.from(root.querySelectorAll<SVGPathElement>(".wf-edge"))) {
-    const active = key !== null && (edge.dataset.from === key || edge.dataset.to === key);
+    const active = neighbours.has(edge.dataset.from!) && neighbours.has(edge.dataset.to!);
     edge.classList.toggle("wf-dependency-active", active);
     edge.classList.toggle("wf-dependency-dim", key !== null && !active);
-    if (active) {
-      neighbours.add(edge.dataset.from!);
-      neighbours.add(edge.dataset.to!);
-    }
   }
   for (const card of Array.from(root.querySelectorAll<HTMLElement>(".wf-ticket"))) {
     const active = neighbours.has(card.dataset.issueKey ?? "");

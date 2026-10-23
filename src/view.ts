@@ -12,12 +12,14 @@ import {
   buildModel,
   dependencyGraph,
   issueKey,
+  loadedDependencyGraph,
   mergeModels,
   type MapTree,
   type Model,
   type RawIssue,
   type Ticket,
   type DependencyNode,
+  type DependencyGraph,
 } from "./model";
 import { renderToolbar, type MapChoice, type ToolbarControls } from "./toolbar";
 import { drawAllEdges, highlightDependencies, renderTree } from "./tree";
@@ -42,6 +44,7 @@ export class WayfinderView extends ItemView {
   private selectedIssues = new Set<string>();
   private dependencySelection: string | null = null;
   private dependencyHover: string | null = null;
+  private highlightGraph: DependencyGraph = { nodes: [], edges: [] };
 
   /** Per-device (localStorage, not synced): phones default to list, desktops to tree. */
   private get mode(): ViewMode {
@@ -383,7 +386,7 @@ export class WayfinderView extends ItemView {
   }
 
   private updateDependencyHighlight(): void {
-    highlightDependencies(this.contentEl, this.dependencySelection ?? this.dependencyHover);
+    highlightDependencies(this.contentEl, this.dependencySelection ?? this.dependencyHover, this.highlightGraph);
   }
 
   private clearDependencyHighlight(): void {
@@ -452,6 +455,7 @@ export class WayfinderView extends ItemView {
 
     const configuredRepos = this.configuredRepos;
     const configuredSnapshots = configuredRepos.filter((repo) => this.plugin.snapshots[repo]);
+    this.highlightGraph = loadedDependencyGraph(configuredSnapshots.map((repo) => this.plugin.snapshots[repo]));
     if (configuredSnapshots.length === 0) {
       const empty = root.createDiv({ cls: "wf-empty" });
       if (this.plugin.syncing) {
