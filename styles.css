@@ -11,8 +11,8 @@
   --wf-status-orange: var(--color-orange, #f0a05a);
   --wf-status-green: var(--color-green, #70c878);
   padding: 0.75rem 1rem 2rem;
-  overflow-y: auto;
-  touch-action: pan-x pan-y; /* leave panning native; pinch is ours */
+  display: flex; flex-direction: column;
+  overflow: hidden;
 }
 .wayfinder-view.wf-selecting { padding-bottom: 5.5rem; }
 body.theme-light .wayfinder-view {
@@ -31,6 +31,18 @@ body.theme-light .wayfinder-view {
   font-size: 0.72em; font-variant-numeric: tabular-nums;
   color: var(--text-muted); min-width: 3.2em; justify-content: center;
 }
+.wf-viewport {
+  position: relative; flex: 1; min-height: 0;
+  overflow: hidden; overflow: clip;
+  touch-action: none; cursor: grab;
+  container-type: inline-size;
+}
+.wf-zoom {
+  position: absolute; top: 0; left: 0; width: 100%;
+  transform-origin: 0 0;
+}
+.wf-panning, .wf-panning * { cursor: grabbing !important; user-select: none; }
+.wayfinder-view > .wf-tally { flex-shrink: 0; }
 
 .wf-t-grilling { --tc: var(--wf-grilling, #3fb950); }
 .wf-t-research { --tc: var(--wf-research, #58a6ff); }
@@ -108,7 +120,8 @@ body.theme-light .wayfinder-view {
 .wf-orphan-why { color: var(--text-faint); margin-left: auto; font-size: 0.9em; }
 
 /* ── map section ── */
-.wf-map-section { margin-bottom: 1.6rem; }
+.wf-map-section { margin-bottom: 1.6rem; width: max-content; min-width: 100%; }
+.wf-map-list { width: 100%; }
 .wf-mapcard {
   display: flex; align-items: flex-start; gap: 0.5rem;
   background: color-mix(in srgb, var(--wf-map) 12%, var(--background-secondary));
@@ -135,7 +148,7 @@ body.theme-light .wayfinder-view {
 .wf-no-tickets { color: var(--text-faint); font-size: 0.8em; padding: 0.5rem 0.2rem; }
 
 /* ── tree ── */
-.wf-tree-scroll { overflow-x: auto; padding: 1.1rem 0.2rem 0.4rem; }
+.wf-tree-scroll { padding: 1.1rem 0.2rem 0.4rem; }
 .wf-tree {
   position: relative; display: flex; flex-direction: column; gap: 2rem;
   align-items: center; width: max-content; min-width: 100%;
@@ -247,13 +260,17 @@ body.theme-light .wayfinder-view {
 /* ── hybrid mode ── */
 .wf-hybrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
+  grid-template-columns: minmax(24rem, max-content) minmax(24rem, 1fr);
   gap: 1rem; padding-top: 0.8rem;
 }
 .wf-hybrid-pane {
-  min-width: 0; padding: 0.2rem 0.65rem 0.65rem;
+  min-width: min-content; padding: 0.2rem 0.65rem 0.65rem;
   border: 1px solid var(--background-modifier-border); border-radius: 7px;
   background: var(--background-primary-alt, var(--background-primary));
+}
+/* Use the pane width, including in narrow desktop splits, for hybrid layout. */
+@container (max-width: 50rem) {
+  .wf-hybrid { grid-template-columns: minmax(0, 1fr); }
 }
 .wf-pane-heading {
   padding: 0.35rem 0 0.15rem;

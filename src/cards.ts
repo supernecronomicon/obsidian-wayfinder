@@ -20,6 +20,7 @@ export interface TicketCardOptions {
   makeInteractive(el: HTMLElement, activate: () => void, open?: () => void): void;
   attachHover(el: HTMLElement, ticket: Ticket, map: MapTree): void;
   select(ticket: Ticket): void;
+  navigate?(ticket: Ticket): void;
   activateTicket?(ticket: Ticket): void;
 }
 
@@ -85,7 +86,10 @@ export function renderTicketCard(
   const statusClass = blocked ? " wf-status-blocked" : ticket.frontier ? " wf-status-open" : "";
   main.createDiv({ cls: `wf-meta${statusClass}`, text: metaText });
 
-  const openDetails = (): void => new TicketModal(options.app, options.plugin, ticket, map).open();
+  const openDetails = (): void => {
+    options.navigate?.(ticket);
+    new TicketModal(options.app, options.plugin, ticket, map).open();
+  };
   if (options.changed(ticket)) card.addClass("wf-changed");
   addIconActions(card, ticket.repo, ticket.issue, options.plugin,
     options.activateTicket ? openDetails : undefined,

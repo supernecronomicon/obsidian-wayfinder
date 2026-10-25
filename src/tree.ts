@@ -70,7 +70,10 @@ function drawEdges(tree: HTMLElement, graph: DependencyGraph): void {
   if (!svg) return;
   const treeRect = tree.getBoundingClientRect();
   if (treeRect.width === 0) return;
-  svg.setAttr("viewBox", `0 0 ${treeRect.width} ${treeRect.height}`);
+  // Draw in map coordinates. The view's shared transform scales cards and SVG
+  // together, so pan/zoom never needs to rebuild dependency paths.
+  const scale = treeRect.width / tree.offsetWidth;
+  svg.setAttr("viewBox", `0 0 ${treeRect.width / scale} ${treeRect.height / scale}`);
   svg.empty();
   const cards = new Map<string, HTMLElement>();
   for (const card of Array.from(tree.querySelectorAll<HTMLElement>(".wf-ticket"))) {
@@ -80,30 +83,38 @@ function drawEdges(tree: HTMLElement, graph: DependencyGraph): void {
     const from = cards.get(edge.from);
     const to = cards.get(edge.to);
     if (!from || !to) continue;
-    const path = drawEdge(svg, treeRect, from, to);
+    const path = drawEdge(svg, treeRect, scale, from, to);
     path.dataset.from = edge.from;
     path.dataset.to = edge.to;
     if (edge.ghost) path.classList.add("wf-edge-ghost");
   }
 }
 
-function drawEdge(svg: SVGSVGElement, treeRect: DOMRect, from: HTMLElement, to: HTMLElement): SVGPathElement {
-  const source = from.getBoundingClientRect();
-  const target = to.getBoundingClientRect();
-  const x1 = source.left + source.width / 2 - treeRect.left;
-  const y1 = source.bottom - treeRect.top;
-  const x2 = target.left + target.width / 2 - treeRect.left;
-  const y2 = target.top - treeRect.top;
+function drawEdge(svg: SVGSVGElement, bounds: DOMRect, scale: number, from: HTMLElement, to: HTMLElement): SVGPathElement {
+  const localRect = (element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: (rect.left - bounds.left) / scale, right: (rect.right - bounds.left) / scale,
+      top: (rect.top - bounds.top) / scale, bottom: (rect.bottom - bounds.top) / scale,
+      width: rect.width / scale, height: rect.height / scale,
+    };
+  };
+  const source = localRect(from);
+  const target = localRect(to);
+  const x1 = source.left + source.width / 2;
+  const y1 = source.bottom;
+  const x2 = target.left + target.width / 2;
+  const y2 = target.top;
   const middleY = (y2 - y1) / 2;
   const path = svg.createSvg("path");
   if (target.top <= source.top) {
     // Cycles (including a ghost that is both blocker and dependant) route
     // around the cards rather than back through their titles.
-    const right1 = source.right - treeRect.left;
-    const right2 = target.right - treeRect.left;
+    const right1 = source.right;
+    const right2 = target.right;
     const side = Math.max(right1, right2) + 20;
-    const mid1 = source.top + source.height / 2 - treeRect.top;
-    const mid2 = target.top + target.height / 2 - treeRect.top;
+    const mid1 = source.top + source.height / 2;
+    const mid2 = target.top + target.height / 2;
     path.setAttr("d", `M ${right1} ${mid1} C ${side} ${mid1}, ${side} ${mid2}, ${right2} ${mid2}`);
   } else {
     path.setAttr("d", `M ${x1} ${y1} C ${x1} ${y1 + middleY}, ${x2} ${y2 - middleY}, ${x2} ${y2}`);

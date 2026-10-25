@@ -24,6 +24,10 @@ import {
 import { renderToolbar, type MapChoice, type ToolbarControls } from "./toolbar";
 import { drawAllEdges, highlightDependencies, renderTree } from "./tree";
 import { parseViewMode, projectView, type ViewMode } from "./view-state";
+import {
+  animationFrame, clampZoom, navigationTarget, panBy, wheelPixels, wheelZoom, zoomAt,
+  type Point, type ViewTransform,
+} from "./viewport";
 
 export const VIEW_TYPE_WAYFINDER = "wayfinder-maps-view";
 
@@ -33,8 +37,6 @@ const HIDDEN_REPOS_KEY = "wayfinder-hidden-repos";
 const SELECTED_MAP_KEY = "wayfinder-selected-map";
 const SHOW_COMPLETED_MAPS_KEY = "wayfinder-show-completed-maps";
 const INCOMPLETE_TICKETS_ONLY_KEY = "wayfinder-incomplete-tickets-only";
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 2;
 
 export class WayfinderView extends ItemView {
   /** Per-map collapse override; default is expanded for open maps, collapsed for closed. */
@@ -68,20 +70,88 @@ export class WayfinderView extends ItemView {
     return storedBoolean(INCOMPLETE_TICKETS_ONLY_KEY, false);
   }
 
-  /** Per-device zoom factor for the map area (CSS zoom, so layout reflows). */
+  /** The only map transform; rerenders preserve it, only zoom persists per device. */
+  private transform: ViewTransform = {
+    x: 0, y: 0,
+    zoom: clampZoom(parseFloat(window.localStorage.getItem(ZOOM_KEY) ?? "")),
+  };
+  private navigationRaf = 0;
+  private navigationEnd: ViewTransform | null = null;
+  private viewport: HTMLElement | null = null;
+  private zoomWrap: HTMLElement | null = null;
+  private resetViewportGestures = (): void => {};
+
   private get zoom(): number {
-    const v = parseFloat(window.localStorage.getItem(ZOOM_KEY) ?? "");
-    return Number.isFinite(v) ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v)) : 1;
+    return this.transform.zoom;
   }
 
-  private setZoom(z: number): void {
-    const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
-    window.localStorage.setItem(ZOOM_KEY, String(clamped));
-    const wrap = this.contentEl.querySelector<HTMLElement>(".wf-zoom");
-    if (wrap) wrap.setCssStyles({ zoom: String(clamped) });
+  private applyTransform(transform: ViewTransform, persistZoom = false): void {
+    this.transform = transform;
+    this.zoomWrap?.setCssStyles({
+      transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.zoom})`,
+    });
+    if (persistZoom) window.localStorage.setItem(ZOOM_KEY, String(transform.zoom));
     const label = this.contentEl.querySelector<HTMLElement>(".wf-zoom-label");
-    if (label) label.setText(`${Math.round(clamped * 100)}%`);
-    this.scheduleEdges();
+    if (label) label.setText(`${Math.round(transform.zoom * 100)}%`);
+  }
+
+  private stopNavigation(): void {
+    window.cancelAnimationFrame(this.navigationRaf);
+    if (this.navigationEnd) window.localStorage.setItem(ZOOM_KEY, String(this.zoom));
+    this.navigationRaf = 0;
+    this.navigationEnd = null;
+  }
+
+  private setZoom(z: number, anchor?: Point): void {
+    this.stopNavigation();
+    this.hoverCards.clear();
+    this.applyTransform(zoomAt(this.transform, z, anchor ?? {
+      x: (this.viewport?.clientWidth ?? 0) / 2, y: (this.viewport?.clientHeight ?? 0) / 2,
+    }), true);
+  }
+
+  private pan(delta: Point): void {
+    this.stopNavigation();
+    this.hoverCards.clear();
+    this.applyTransform(panBy(this.transform, delta));
+  }
+
+  private navigateTo(element: HTMLElement): void {
+    const viewport = this.viewport;
+    if (!viewport) return;
+    this.stopNavigation();
+    const rect = element.getBoundingClientRect();
+    const bounds = viewport.getBoundingClientRect();
+    const from = { ...this.transform };
+    const to = navigationTarget({
+      x: (rect.left - bounds.left - from.x) / from.zoom,
+      y: (rect.top - bounds.top - from.y) / from.zoom,
+      width: rect.width / from.zoom, height: rect.height / from.zoom,
+    }, { width: viewport.clientWidth, height: viewport.clientHeight });
+    this.hoverCards.clear();
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      this.applyTransform(to, true);
+      return;
+    }
+    this.navigationEnd = to;
+    const start = window.performance.now();
+    const tick = (now: number): void => {
+      const progress = (now - start) / 360;
+      this.applyTransform(animationFrame(from, to, progress));
+      if (progress < 1) this.navigationRaf = window.requestAnimationFrame(tick);
+      else {
+        this.stopNavigation();
+        this.applyTransform(to, true);
+      }
+    };
+    this.navigationRaf = window.requestAnimationFrame(tick);
+  }
+
+  private navigateToTicket(ticket: Ticket): void {
+    const key = issueKey(ticket.repo, ticket.issue.number);
+    const card = Array.from(this.contentEl.querySelectorAll<HTMLElement>("[data-issue-key]:not(.wf-ghost)"))
+      .find((el) => el.dataset.issueKey === key);
+    if (card) this.navigateTo(card);
   }
   private hoverCards = new HoverCards();
   private resizeObserver: ResizeObserver | null = null;
@@ -118,7 +188,7 @@ export class WayfinderView extends ItemView {
     ).open();
   }
 
-  /** Loosen only the filters that would hide this ticket, then scroll to and highlight it. */
+  /** Loosen only the filters hiding this ticket, then fly to and highlight it. */
   revealTicket(hit: SearchHit): void {
     const { ticket, map } = hit;
     const hidden = this.hiddenRepos;
@@ -150,7 +220,7 @@ export class WayfinderView extends ItemView {
       new Notice(`Wayfinder: #${ticket.issue.number} is not on the map.`);
       return;
     }
-    card.scrollIntoView({ block: "center", inline: "center" });
+    this.navigateTo(card);
     card.querySelector<HTMLElement>(".wf-card-main")?.focus({ preventScroll: true });
     card.addClass("wf-search-hit");
     window.setTimeout(() => card.removeClass("wf-search-hit"), 4000);
@@ -184,7 +254,7 @@ export class WayfinderView extends ItemView {
       }),
     );
     this.startPolling();
-    this.registerZoomGestures();
+    this.registerViewportGestures();
     this.registerDependencyHighlight();
     // Coming back from sleep/background: sync immediately if data is stale.
     this.registerDomEvent(window, "focus", () => {
@@ -200,54 +270,156 @@ export class WayfinderView extends ItemView {
     void this.plugin.sync(false);
   }
 
-  /** Ctrl/Cmd+wheel (also trackpad pinch) on desktop; two-finger pinch on touch. */
-  private registerZoomGestures(): void {
+  /** One viewport handles both scroll axes, drag, and pointer-anchored zoom. */
+  private registerViewportGestures(): void {
+    const inViewport = (target: EventTarget | null): boolean =>
+      target instanceof Node && !!this.viewport?.contains(target);
+    const localPoint = (x: number, y: number): Point => {
+      const bounds = this.viewport!.getBoundingClientRect();
+      return { x: x - bounds.left, y: y - bounds.top };
+    };
     this.registerDomEvent(
       this.contentEl,
       "wheel",
       (e: WheelEvent) => {
-        if (!e.ctrlKey && !e.metaKey) return;
+        if (!inViewport(e.target) || !this.viewport) return;
         e.preventDefault();
-        this.setZoom(this.zoom * (e.deltaY < 0 ? 1.08 : 1 / 1.08));
-      },
-      { passive: false },
-    );
-
-    const touches = new Map<number, { x: number; y: number }>();
-    let pinchBase: { dist: number; zoom: number } | null = null;
-    const dist = (): number => {
-      const [a, b] = [...touches.values()];
-      return Math.hypot(a.x - b.x, a.y - b.y);
-    };
-    this.registerDomEvent(this.contentEl, "pointerdown", (e: PointerEvent) => {
-      if (e.pointerType !== "touch") return;
-      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      pinchBase = touches.size === 2 ? { dist: dist(), zoom: this.zoom } : null;
-    });
-    this.registerDomEvent(
-      this.contentEl,
-      "pointermove",
-      (e: PointerEvent) => {
-        if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
-        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (pinchBase && touches.size === 2) {
-          e.preventDefault();
-          this.setZoom((pinchBase.zoom * dist()) / pinchBase.dist);
+        const delta = wheelPixels({ x: e.deltaX, y: e.deltaY }, e.deltaMode, {
+          width: this.viewport.clientWidth, height: this.viewport.clientHeight,
+        });
+        if (e.ctrlKey || e.metaKey) {
+          this.setZoom(wheelZoom(this.zoom, delta.y), localPoint(e.clientX, e.clientY));
+        } else {
+          // Plain wheel/two-finger scroll remains pan, including simultaneous X/Y.
+          this.pan({ x: -delta.x, y: -delta.y });
         }
       },
       { passive: false },
     );
-    const endTouch = (e: PointerEvent): void => {
-      touches.delete(e.pointerId);
-      if (touches.size < 2) pinchBase = null;
+
+    const touches = new Map<number, Point>();
+    let touchBase: { centre: Point; dist: number } | null = null;
+    let drag: { id: number; start: Point; last: Point; viewport: HTMLElement; active: boolean } | null = null;
+    let suppressClick = false;
+    const touchGeometry = (): { centre: Point; dist: number } | null => {
+      const [a, b] = [...touches.values()];
+      if (!a) return null;
+      return {
+        centre: b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : a,
+        dist: b ? Math.hypot(a.x - b.x, a.y - b.y) : 0,
+      };
     };
-    this.registerDomEvent(this.contentEl, "pointerup", endTouch);
-    this.registerDomEvent(this.contentEl, "pointercancel", endTouch);
+    this.registerDomEvent(this.contentEl, "pointerdown", (e: PointerEvent) => {
+      suppressClick = false;
+      if (!inViewport(e.target) || !this.viewport) return;
+      this.stopNavigation();
+      if (e.target instanceof Element && e.target.closest("button, a, input, select, textarea, .wf-actions")) return;
+      const point = { x: e.clientX, y: e.clientY };
+      if (e.pointerType === "touch") {
+        touches.set(e.pointerId, point);
+        touchBase = touchGeometry();
+      } else if (e.button === 0 || e.button === 1) {
+        drag = { id: e.pointerId, start: point, last: point, viewport: this.viewport, active: false };
+        if (e.button === 1) e.preventDefault();
+      }
+    });
+    this.registerDomEvent(
+      this.contentEl.ownerDocument,
+      "pointermove",
+      (e: PointerEvent) => {
+        const point = { x: e.clientX, y: e.clientY };
+        if (touches.has(e.pointerId) && this.viewport) {
+          e.preventDefault();
+          const previous = touchBase;
+          touches.set(e.pointerId, point);
+          touchBase = touchGeometry();
+          if (previous && touchBase) {
+            const delta = { x: touchBase.centre.x - previous.centre.x, y: touchBase.centre.y - previous.centre.y };
+            if (delta.x !== 0 || delta.y !== 0 || previous.dist !== touchBase.dist) {
+              suppressClick = true;
+              this.viewport.setPointerCapture(e.pointerId);
+              this.pan(delta);
+              if (previous.dist > 0 && touchBase.dist > 0) {
+                this.setZoom(this.zoom * touchBase.dist / previous.dist,
+                  localPoint(touchBase.centre.x, touchBase.centre.y));
+              }
+            }
+          }
+          return;
+        }
+        if (!drag || drag.id !== e.pointerId || drag.viewport !== this.viewport) return;
+        if (!drag.active && Math.hypot(point.x - drag.start.x, point.y - drag.start.y) < 4) return;
+        if (!drag.active) {
+          drag.active = true;
+          suppressClick = true;
+          this.viewport.setPointerCapture(e.pointerId);
+          this.viewport.addClass("wf-panning");
+          this.hoverCards.clear();
+        }
+        e.preventDefault();
+        this.pan({ x: point.x - drag.last.x, y: point.y - drag.last.y });
+        drag.last = point;
+      },
+      { passive: false },
+    );
+    const endPointer = (e: PointerEvent): void => {
+      touches.delete(e.pointerId);
+      touchBase = touchGeometry();
+      if (drag?.id === e.pointerId) {
+        drag.viewport.removeClass("wf-panning");
+        drag = null;
+      }
+    };
+    this.registerDomEvent(this.contentEl.ownerDocument, "pointerup", endPointer);
+    this.registerDomEvent(this.contentEl.ownerDocument, "pointercancel", endPointer);
+    this.registerDomEvent(this.contentEl, "lostpointercapture", endPointer);
+    this.resetViewportGestures = () => {
+      const viewport = drag?.viewport ?? this.viewport;
+      for (const id of [...touches.keys(), ...(drag ? [drag.id] : [])]) {
+        if (viewport?.hasPointerCapture(id)) viewport.releasePointerCapture(id);
+      }
+      touches.clear();
+      touchBase = null;
+      drag?.viewport.removeClass("wf-panning");
+      drag = null;
+    };
+    this.registerDomEvent(window, "blur", () => this.resetViewportGestures());
+    for (const type of ["click", "dblclick"] as const) {
+      this.registerDomEvent(this.contentEl, type, (event: MouseEvent) => {
+        if (!suppressClick || event.detail === 0) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+    }
+    // Tab navigation can focus cards outside the clipped viewport. Reveal those
+    // through the same owner rather than letting the browser scroll hidden boxes.
+    this.registerDomEvent(this.contentEl, "focusin", (event: FocusEvent) => {
+      if (!(event.target instanceof Element) || !inViewport(event.target) || !this.viewport) return;
+      const card = event.target.closest<HTMLElement>("[data-issue-key], .wf-mapcard");
+      if (!card) return;
+      this.viewport.scrollTop = this.viewport.scrollLeft = 0;
+      const rect = card.getBoundingClientRect();
+      const bounds = this.viewport.getBoundingClientRect();
+      if (rect.left < bounds.left || rect.right > bounds.right || rect.top < bounds.top || rect.bottom > bounds.bottom) {
+        this.navigateTo(card);
+      }
+    });
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const motionChanged = (): void => {
+      if (!motion.matches || !this.navigationEnd) return;
+      const end = this.navigationEnd;
+      this.stopNavigation();
+      this.applyTransform(end, true);
+    };
+    motion.addEventListener("change", motionChanged);
+    this.register(() => motion.removeEventListener("change", motionChanged));
   }
 
   async onClose(): Promise<void> {
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
     window.cancelAnimationFrame(this.edgeRaf);
+    this.stopNavigation();
+    this.resetViewportGestures();
     this.hoverCards.clear();
     this.resizeObserver?.disconnect();
   }
@@ -263,7 +435,7 @@ export class WayfinderView extends ItemView {
 
   /**
    * Re-render only when the data actually changed; otherwise just refresh the
-   * sync-status text. A full render every poll would reset scroll and hover.
+   * sync-status text. A full render every poll would rebuild cards and hover.
    */
   private onDataUpdated(): void {
     const key = this.snapshotKey();
@@ -434,12 +606,10 @@ export class WayfinderView extends ItemView {
 
   private render(): void {
     const root = this.contentEl;
-    const scrollTop = root.scrollTop;
-    const mapScrollLeft = new Map<string, number>();
-    for (const scroller of Array.from(root.querySelectorAll<HTMLElement>(".wf-tree-scroll"))) {
-      const mapKey = scroller.dataset.mapKey;
-      if (mapKey) mapScrollLeft.set(mapKey, scroller.scrollLeft);
-    }
+    this.stopNavigation();
+    this.resetViewportGestures();
+    this.viewport = null;
+    this.zoomWrap = null;
     this.lastRenderKey = this.snapshotKey();
     root.empty();
     root.addClass("wayfinder-view");
@@ -517,8 +687,12 @@ export class WayfinderView extends ItemView {
       root.createDiv({ text: this.plugin.configError, cls: "wf-error" });
     }
     for (const error of this.errorLines()) root.createDiv({ text: error, cls: "wf-error" });
-    const zoomWrap = root.createDiv({ cls: "wf-zoom" });
-    zoomWrap.setCssStyles({ zoom: String(this.zoom) });
+    this.viewport = root.createDiv({ cls: "wf-viewport", attr: {
+      "aria-label": "Map canvas. Drag or scroll to pan; Ctrl/Cmd+wheel or pinch to zoom.",
+    } });
+    const zoomWrap = this.viewport.createDiv({ cls: "wf-zoom" });
+    this.zoomWrap = zoomWrap;
+    this.applyTransform(this.transform);
     if (visibleModel.orphans.length > 0) this.renderOrphans(zoomWrap, visibleModel.orphans);
     for (const map of visibleModel.maps) this.renderMap(zoomWrap, map);
     if (visibleModel.maps.length === 0) {
@@ -531,11 +705,6 @@ export class WayfinderView extends ItemView {
     }
     if (this.selectionMode) this.renderSelectBar(root, visibleModel);
 
-    root.scrollTop = scrollTop;
-    for (const scroller of Array.from(root.querySelectorAll<HTMLElement>(".wf-tree-scroll"))) {
-      const scrollLeft = mapScrollLeft.get(scroller.dataset.mapKey ?? "");
-      if (scrollLeft !== undefined) scroller.scrollLeft = scrollLeft;
-    }
     this.prevUpdated = new Map(
       this.shownRepos.flatMap((repo) =>
         (this.plugin.snapshots[repo]?.issues ?? []).map((issue) => [
@@ -628,6 +797,8 @@ export class WayfinderView extends ItemView {
       window.localStorage.removeItem(SELECTED_MAP_KEY);
     }
     this.render();
+    const head = this.zoomWrap?.querySelector<HTMLElement>(".wf-mapcard");
+    if (head) this.navigateTo(head);
   }
 
   private setShowCompletedMaps(show: boolean): void {
@@ -801,7 +972,10 @@ export class WayfinderView extends ItemView {
         cls: "wf-orphan-why",
         text: t.parent === null ? "no “Part of #N” line" : `parent #${t.parent} is not a map`,
       });
-      makeInteractive(main, () => new TicketModal(this.app, this.plugin, t, null).open());
+      makeInteractive(main, () => {
+        this.navigateTo(row);
+        new TicketModal(this.app, this.plugin, t, null).open();
+      });
     }
   }
 
@@ -812,7 +986,7 @@ export class WayfinderView extends ItemView {
     const mapKey = issueKey(map.repo, map.issue.number);
     const collapsed = this.collapsedOverride.get(mapKey) ?? isClosed;
     const expanded = !collapsed;
-    const section = root.createDiv({ cls: "wf-map-section" });
+    const section = root.createDiv({ cls: `wf-map-section wf-map-${this.mode}` });
 
     const head = section.createDiv({ cls: "wf-mapcard" });
     const chevron = head.createEl("button", {
@@ -861,9 +1035,10 @@ export class WayfinderView extends ItemView {
     }
 
     if (this.changedSinceLastRender(map.repo, map.issue)) head.addClass("wf-changed");
-    addIconActions(head, map.repo, map.issue, this.plugin, () =>
-      new TicketModal(this.app, this.plugin, null, map).open(),
-    );
+    addIconActions(head, map.repo, map.issue, this.plugin, () => {
+      this.navigateTo(head);
+      new TicketModal(this.app, this.plugin, null, map).open();
+    });
     makeInteractive(headMain, () => {
       this.collapsedOverride.set(mapKey, expanded);
       this.render();
@@ -923,6 +1098,7 @@ export class WayfinderView extends ItemView {
       makeInteractive,
       attachHover: (element, ticket, map) => this.hoverCards.attach(element, ticket, map),
       select: (ticket) => this.toggleTicketSelection(ticket),
+      navigate: (ticket) => this.navigateToTicket(ticket),
     };
   }
 
