@@ -1,5 +1,6 @@
 import { renderTicketCard, type TicketCardOptions } from "./cards";
 import { dependencyClosure, issueKey, type DependencyGraph, type DependencyNode, type MapTree } from "./model";
+import { wrapTicketRows } from "./tree-layout";
 
 const graphs = new WeakMap<HTMLElement, DependencyGraph>();
 
@@ -10,6 +11,7 @@ export function renderTree(
   graph: DependencyGraph,
   openGhost: (node: DependencyNode) => void,
   selectNode: (key: string) => void,
+  ticketsPerRow: number,
 ): HTMLElement {
   const scroller = section.createDiv({ cls: "wf-tree-scroll" });
   scroller.dataset.mapKey = issueKey(map.repo, map.issue.number);
@@ -23,31 +25,33 @@ export function renderTree(
   const blockers = new Set(graph.edges.filter((edge) => ghostKeys.has(edge.from)).map((edge) => edge.from));
   const renderGhosts = (nodes: DependencyNode[], label: string): void => {
     if (nodes.length === 0) return;
-    const layer = tree.createDiv({ cls: "wf-layer wf-ghost-layer", attr: { "aria-label": label } });
-    for (const node of nodes) {
-      const container = node.state === "closed" ? layer.createDiv({ cls: "wf-closed-backing" }) : layer;
-      const card = container.createDiv({ cls: `wf-ticket wf-ghost${node.state === "closed" ? " wf-closed" : ""}` });
-      card.dataset.issueKey = node.key;
-      const main = card.createDiv({ cls: "wf-card-main" });
-      const location = node.map ? `#${node.map.number} ${node.map.title} · ${node.repo}` : node.repo;
-      main.setAttr("aria-label", `#${node.number} ${node.title}, ${node.state}, ${location}`);
-      const row = main.createDiv({ cls: "wf-row1" });
-      row.createSpan({ cls: "wf-num", text: `#${node.number}` });
-      row.createSpan({
-        cls: `wf-ghost-state${node.state === "open" ? " wf-status-open" : ""}`,
-        text: node.state === "open" ? "● open" : node.state,
-      });
-      main.createDiv({ cls: "wf-ticket-title", text: node.title });
-      main.createDiv({ cls: "wf-ghost-location", text: location });
-      main.setAttr("title", "Click or Enter/Space to highlight all upstream/downstream dependencies · Double-click or Shift+Enter to navigate to this ticket · Esc clears highlight");
-      cardOptions.makeInteractive(main, () => selectNode(node.key), () => {
-        selectNode(node.key);
-        openGhost(node);
-      });
+    for (const row of wrapTicketRows([nodes], ticketsPerRow)) {
+      const layer = tree.createDiv({ cls: "wf-layer wf-ghost-layer", attr: { "aria-label": label } });
+      for (const node of row) {
+        const container = node.state === "closed" ? layer.createDiv({ cls: "wf-closed-backing" }) : layer;
+        const card = container.createDiv({ cls: `wf-ticket wf-ghost${node.state === "closed" ? " wf-closed" : ""}` });
+        card.dataset.issueKey = node.key;
+        const main = card.createDiv({ cls: "wf-card-main" });
+        const location = node.map ? `#${node.map.number} ${node.map.title} · ${node.repo}` : node.repo;
+        main.setAttr("aria-label", `#${node.number} ${node.title}, ${node.state}, ${location}`);
+        const row = main.createDiv({ cls: "wf-row1" });
+        row.createSpan({ cls: "wf-num", text: `#${node.number}` });
+        row.createSpan({
+          cls: `wf-ghost-state${node.state === "open" ? " wf-status-open" : ""}`,
+          text: node.state === "open" ? "● open" : node.state,
+        });
+        main.createDiv({ cls: "wf-ticket-title", text: node.title });
+        main.createDiv({ cls: "wf-ghost-location", text: location });
+        main.setAttr("title", "Click or Enter/Space to highlight all upstream/downstream dependencies · Double-click or Shift+Enter to navigate to this ticket · Esc clears highlight");
+        cardOptions.makeInteractive(main, () => selectNode(node.key), () => {
+          selectNode(node.key);
+          openGhost(node);
+        });
+      }
     }
   };
   renderGhosts(ghosts.filter((node) => blockers.has(node.key)), "External blockers");
-  for (const layer of map.layers) {
+  for (const layer of wrapTicketRows(map.layers, ticketsPerRow)) {
     const layerEl = tree.createDiv({ cls: "wf-layer" });
     for (const ticket of layer) renderTicketCard(layerEl, ticket, map, {
       ...cardOptions,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { makeInteractive } from "../src/interaction";
+import { activateInteractive, makeInteractive, selectDependency } from "../src/interaction";
 
 /** Minimal event surface; full card/modal wiring is exercised in the browser harness. */
 class Surface extends EventTarget {
@@ -71,4 +71,23 @@ test("navigation-only cards activate once during a double-click and retain keybo
   assert.deepEqual(calls, ["select"]);
   fire("keydown", { key: "Enter", shiftKey: true });
   assert.deepEqual(calls, ["select", "select"]);
+});
+
+test("search activation has the same selection and details effects as click and keyboard", () => {
+  for (const details of [false, true]) {
+    for (const input of ["click", "keydown", "search"]) {
+      const surface = new Surface();
+      let selection = { selected: "old#1" as string | null, hovered: "old#2" as string | null };
+      const opened: string[] = [];
+      makeInteractive(surface as unknown as HTMLElement, () => {
+        selection = selectDependency(selection, "new#3");
+        if (details) opened.push("new#3");
+      });
+      if (input === "search") activateInteractive(surface as unknown as HTMLElement);
+      else surface.dispatchEvent(Object.assign(new Event(input, { cancelable: true }),
+        input === "click" ? { detail: 1 } : { key: "Enter" }));
+      assert.deepEqual(selection, { selected: "new#3", hovered: null });
+      assert.deepEqual(opened, details ? ["new#3"] : []);
+    }
+  }
 });

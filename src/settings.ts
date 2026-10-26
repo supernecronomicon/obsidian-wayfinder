@@ -4,13 +4,14 @@ import type {
   SettingDefinitionItem,
   SettingDefinitionList,
 } from "obsidian";
-import { DEFAULT_SETTINGS } from "./config";
+import { DEFAULT_SETTINGS, parseTicketsPerRow } from "./config";
 import type WayfinderPlugin from "./main";
 
 const TOKEN_DESCRIPTION =
   "Fine-grained personal access token with read-only Issues permission for the repo. " +
   "Create one at github.com → Settings → Developer settings → Fine-grained tokens. " +
   "Stored in plain text in this vault's plugin data.";
+const ROW_DESCRIPTION = "Maximum tickets on each tree row. Use 0 or leave empty for no limit.";
 
 export class WayfinderSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: WayfinderPlugin) {
@@ -93,7 +94,16 @@ export class WayfinderSettingTab extends PluginSettingTab {
         defaultValue: DEFAULT_SETTINGS.copyTemplate,
       },
     };
-    return [repos, syncInterval, copyTemplate];
+    const ticketsPerRow: SettingDefinitionControl = {
+      name: "Tickets per row",
+      desc: ROW_DESCRIPTION,
+      control: {
+        type: "text",
+        key: "ticketsPerRow",
+        defaultValue: String(DEFAULT_SETTINGS.ticketsPerRow),
+      },
+    };
+    return [repos, syncInterval, ticketsPerRow, copyTemplate];
   }
 
   /** Fallback for Obsidian < 1.13, where getSettingDefinitions() is never called. */
@@ -178,6 +188,15 @@ export class WayfinderSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Tickets per row")
+      .setDesc(ROW_DESCRIPTION)
+      .addText((text) =>
+        text.setValue(String(this.plugin.settings.ticketsPerRow)).onChange(async (value) => {
+          await this.setControlValue("ticketsPerRow", value);
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Copy template")
       .setDesc("What clicking a ticket copies. {url} is replaced with the issue URL.")
       .addText((text) =>
@@ -189,6 +208,7 @@ export class WayfinderSettingTab extends PluginSettingTab {
   }
 
   getControlValue(key: string): unknown {
+    if (key === "ticketsPerRow") return String(this.plugin.settings.ticketsPerRow);
     return this.plugin.settings[key as keyof typeof this.plugin.settings];
   }
 
@@ -197,6 +217,10 @@ export class WayfinderSettingTab extends PluginSettingTab {
       const n = Number(value);
       if (!Number.isFinite(n)) return;
       this.plugin.settings.pollIntervalMinutes = Math.min(120, Math.max(0.5, n));
+    } else if (key === "ticketsPerRow") {
+      const n = parseTicketsPerRow(value);
+      if (n === null) return;
+      this.plugin.settings.ticketsPerRow = n;
     } else if (key === "copyTemplate" && typeof value === "string") {
       this.plugin.settings.copyTemplate = value || DEFAULT_SETTINGS.copyTemplate;
     } else {

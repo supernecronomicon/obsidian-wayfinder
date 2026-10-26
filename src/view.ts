@@ -1,7 +1,7 @@
 import { ItemView, Notice, Platform, Scope, WorkspaceLeaf, setIcon } from "obsidian";
 import { addIconActions, type TicketCardOptions } from "./cards";
 import { HoverCards, relativeTime } from "./hover";
-import { makeInteractive } from "./interaction";
+import { activateInteractive, makeInteractive, selectDependency, type DependencySelection } from "./interaction";
 import { renderList } from "./list";
 import type WayfinderPlugin from "./main";
 import type { TakeableVerification } from "./main";
@@ -25,9 +25,10 @@ import { renderToolbar, type MapChoice, type ToolbarControls } from "./toolbar";
 import { drawAllEdges, highlightDependencies, renderTree } from "./tree";
 import { parseViewMode, projectView, type ViewMode } from "./view-state";
 import {
-  animationFrame, clampZoom, navigationTarget, panBy, wheelPixels, wheelZoom, zoomAt,
+  animationFrame, clampZoom, navigationTarget, panBy, zoomAt,
   type Point, type ViewTransform,
 } from "./viewport";
+import { viewportWheel } from "./viewport-wheel";
 
 export const VIEW_TYPE_WAYFINDER = "wayfinder-maps-view";
 
@@ -44,8 +45,7 @@ export class WayfinderView extends ItemView {
   /** View-local delegation selection; never persisted. */
   private selectionMode = false;
   private selectedIssues = new Set<string>();
-  private dependencySelection: string | null = null;
-  private dependencyHover: string | null = null;
+  private dependencySelection: DependencySelection = { selected: null, hovered: null };
   private highlightGraph: DependencyGraph = { nodes: [], edges: [] };
 
   /** Per-device (localStorage, not synced): phones default to list, desktops to tree. */
@@ -220,8 +220,13 @@ export class WayfinderView extends ItemView {
       new Notice(`Wayfinder: #${ticket.issue.number} is not on the map.`);
       return;
     }
+    this.selectDependency(key);
+    const main = card.querySelector<HTMLElement>(".wf-card-main");
+    if (main) {
+      main.focus({ preventScroll: true });
+      activateInteractive(main);
+    }
     this.navigateTo(card);
-    card.querySelector<HTMLElement>(".wf-card-main")?.focus({ preventScroll: true });
     card.addClass("wf-search-hit");
     window.setTimeout(() => card.removeClass("wf-search-hit"), 4000);
     new Notice(`#${ticket.issue.number} — ${mapLabel(hit, this.configuredRepos.length > 1)}`);
@@ -273,7 +278,7 @@ export class WayfinderView extends ItemView {
   /** One viewport handles both scroll axes, drag, and pointer-anchored zoom. */
   private registerViewportGestures(): void {
     const inViewport = (target: EventTarget | null): boolean =>
-      target instanceof Node && !!this.viewport?.contains(target);
+      !!target && !!this.viewport?.contains(target as Node);
     const localPoint = (x: number, y: number): Point => {
       const bounds = this.viewport!.getBoundingClientRect();
       return { x: x - bounds.left, y: y - bounds.top };
@@ -282,19 +287,13 @@ export class WayfinderView extends ItemView {
       this.contentEl,
       "wheel",
       (e: WheelEvent) => {
-        if (!inViewport(e.target) || !this.viewport) return;
-        e.preventDefault();
-        const delta = wheelPixels({ x: e.deltaX, y: e.deltaY }, e.deltaMode, {
-          width: this.viewport.clientWidth, height: this.viewport.clientHeight,
-        });
-        if (e.ctrlKey || e.metaKey) {
-          this.setZoom(wheelZoom(this.zoom, delta.y), localPoint(e.clientX, e.clientY));
-        } else {
-          // Plain wheel/two-finger scroll remains pan, including simultaneous X/Y.
-          this.pan({ x: -delta.x, y: -delta.y });
-        }
+        const next = viewportWheel(e, this.viewport, this.transform);
+        if (!next) return;
+        this.stopNavigation();
+        this.hoverCards.clear();
+        this.applyTransform(next, e.ctrlKey || e.metaKey);
       },
-      { passive: false },
+      { passive: false, capture: true },
     );
 
     const touches = new Map<number, Point>();
@@ -558,29 +557,32 @@ export class WayfinderView extends ItemView {
   }
 
   private updateDependencyHighlight(): void {
-    highlightDependencies(this.contentEl, this.dependencySelection ?? this.dependencyHover, this.highlightGraph);
+    highlightDependencies(this.contentEl, this.dependencySelection.selected ?? this.dependencySelection.hovered, this.highlightGraph);
+  }
+
+  private selectDependency(key: string | null): void {
+    this.dependencySelection = selectDependency(this.dependencySelection, key);
+    this.updateDependencyHighlight();
   }
 
   private clearDependencyHighlight(): void {
-    this.dependencySelection = null;
-    this.dependencyHover = null;
-    this.updateDependencyHighlight();
+    this.selectDependency(null);
   }
 
   private registerDependencyHighlight(): void {
     const cardAt = (target: EventTarget | null): HTMLElement | null =>
       target instanceof Element ? target.closest<HTMLElement>(".wf-ticket[data-issue-key]") : null;
     this.registerDomEvent(this.contentEl, "pointerover", (event) => {
-      this.dependencyHover = cardAt(event.target)?.dataset.issueKey ?? null;
+      this.dependencySelection.hovered = cardAt(event.target)?.dataset.issueKey ?? null;
       this.updateDependencyHighlight();
     });
     this.registerDomEvent(this.contentEl, "pointerout", (event) => {
-      this.dependencyHover = cardAt(event.relatedTarget)?.dataset.issueKey ?? null;
+      this.dependencySelection.hovered = cardAt(event.relatedTarget)?.dataset.issueKey ?? null;
       this.updateDependencyHighlight();
     });
     this.registerDomEvent(this.contentEl, "click", (event) => {
       const card = cardAt(event.target);
-      if (card) this.dependencySelection = card.dataset.issueKey ?? null;
+      if (card) this.selectDependency(card.dataset.issueKey ?? null);
       else this.clearDependencyHighlight();
       this.updateDependencyHighlight();
     }, true);
@@ -615,7 +617,7 @@ export class WayfinderView extends ItemView {
     root.addClass("wayfinder-view");
     root.classList.toggle("wf-selecting", this.selectionMode);
     this.hoverCards.clear();
-    this.dependencyHover = null;
+    this.dependencySelection.hovered = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = new ResizeObserver(() => {
       this.scheduleEdges();
@@ -1082,10 +1084,7 @@ export class WayfinderView extends ItemView {
     const snapshots = this.configuredRepos.flatMap((repo) => this.plugin.snapshots[repo] ? [this.plugin.snapshots[repo]] : []);
     return renderTree(section, map, this.ticketCardOptions(), dependencyGraph(map, snapshots),
       (node) => this.openGhost(node),
-      (key) => {
-        this.dependencySelection = key;
-        this.updateDependencyHighlight();
-      });
+      (key) => this.selectDependency(key), this.plugin.settings.ticketsPerRow);
   }
 
   private ticketCardOptions(): Omit<TicketCardOptions, "asRow"> {
