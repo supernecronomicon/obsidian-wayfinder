@@ -6,12 +6,14 @@ export interface RepoConfig {
 export interface WayfinderSettings {
   repos: RepoConfig[];
   pollIntervalMinutes: number;
+  ticketsPerRow: number;
   copyTemplate: string;
 }
 
 export const DEFAULT_SETTINGS: WayfinderSettings = {
   repos: [],
   pollIntervalMinutes: 2,
+  ticketsPerRow: 15,
   copyTemplate: "/wayfinder {url}",
 };
 
@@ -42,9 +44,17 @@ export function sanitizeSettings(value: unknown): WayfinderSettings {
   return {
     repos,
     pollIntervalMinutes: interval,
+    ticketsPerRow: parseTicketsPerRow(raw.ticketsPerRow) ?? DEFAULT_SETTINGS.ticketsPerRow,
     copyTemplate:
       typeof raw.copyTemplate === "string" ? raw.copyTemplate : DEFAULT_SETTINGS.copyTemplate,
   };
+}
+
+/** Empty/zero disables wrapping. Reject invalid edits rather than changing the limit. */
+export function parseTicketsPerRow(value: unknown): number | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 
 export function isValidRepoConfig(config: RepoConfig): boolean {

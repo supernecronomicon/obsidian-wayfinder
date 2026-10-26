@@ -40,6 +40,22 @@ export function wheelZoom(zoom: number, deltaY: number): number {
   return clampZoom(zoom * Math.exp(-deltaY * 0.002));
 }
 
+export interface WheelInput {
+  deltaX: number;
+  deltaY: number;
+  deltaMode: number;
+  ctrlKey: boolean;
+  metaKey: boolean;
+}
+
+/** One update per wheel event; never choose a dominant pan axis. */
+export function wheelTransform(view: ViewTransform, wheel: WheelInput, viewport: Size, anchor: Point): ViewTransform {
+  const delta = wheelPixels({ x: wheel.deltaX, y: wheel.deltaY }, wheel.deltaMode, viewport);
+  return wheel.ctrlKey || wheel.metaKey
+    ? zoomAt(view, wheelZoom(view.zoom, delta.y), anchor)
+    : panBy(view, { x: -delta.x, y: -delta.y });
+}
+
 /** Centre a ticket at readable scale, fitting oversized cards into small panes. */
 export function navigationTarget(ticket: MapRect, viewport: Size): ViewTransform {
   const zoom = clampZoom(Math.min(
